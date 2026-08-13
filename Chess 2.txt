@@ -1,0 +1,213 @@
+SCHACH 2 — DAS VOLLSTÄNDIGE REGELWERK (v3.1 PLAYTEST)
+Ein Kriegsspiel auf zehn Linien, wo Figuren verschmelzen, Stapel sich erheben und die Taktik in drei Dimensionen denkt.
+Version 3.1 — Clarified for implementation (English UI; German piece names)
+Canonical base: v3.0, amended below where setup, reserves, splits, views, and clocks were ambiguous.
+
+================================================================================
+v3.1 AMENDMENTS (LOCKED FOR CODE)
+================================================================================
+A) Army: All 15 Soldaten start on the board (0 Soldaten in reserve).
+   On board minimum: 1× Volk, 1× Jugend, 2× Tower, 2× Schütze, 2× Kavallerie, 2× Infanterie, 15× Soldat.
+   Reserve (default): 1× Tower, 1× Schütze, 1× Kavallerie, 1× Infanterie.
+   Players may place the 3rd of a standard type during setup instead of keeping it in reserve.
+   Engine must allow future extra piece types without rewriting core APIs.
+
+B) Soldier base (same every game): 10 fixed files, zigzag ranks; player chooses which 5 files are doubles (15 total).
+   White ranks: A2 B3 C2 D3 E2 F2 G3 H2 I3 J2 (E and F both on rank 2).
+   Black mirrors: A9 B8 C9 D8 E9 F9 G8 H9 I8 J9.
+   During setup, Soldaten are only on ranks 2–3 (White) / 9–8 (Black) — never rank 1 / 10.
+
+C) Main-piece setup squares: only own ranks 1–2 (White) or 10–9 (Black), never the third camp rank (3 / 8).
+   Empty squares only. Placement starts after the 10 base soldier squares exist; doubles chosen in setup.
+   White places first; players alternate. After minimum army is on board, a player may Pass.
+   If one Passes, the other may keep placing (including 3rds). Passed pieces stay in reserve for play.
+   Setup ends when both have Passed (or both finished placing). Passing keeps reserve drops for later;
+   forming a 3-stack in play grants the normal one-shot shoot (no extra meta-ability beyond reserve play).
+
+D) Doppeljugend: only possible by promoting a Doppelsoldat on the enemy back rank (one becomes Jugend + other a non-Volk piece).
+   No Jugend in reserve. You may not stack two setup Jugends onto each other.
+
+E) Identical pair in a 2-stack (T+T, S+S, K+K, I+I, J+J) cannot unstack.
+   In a 3-stack, the top piece may leave if it is not part of locking an identical pair incorrectly;
+   two identical pieces that sit together (not requiring the odd piece to split them illegally) may leave as a unit
+   when they are the moving group and the remaining piece is a different type (see VI.4).
+
+F) Sliding shots/moves are blocked by any piece on the path. Jumpers (Kavallerie, Infanterie and their doubles) jump.
+
+G) Insufficient material (IX.4): deferred — not enforced in v1.
+
+H) Doppelsoldat:
+   - As a unit: move 1 or 2 forward (both squares clear); capture one diagonal step (forward or back) without splitting (stack stays double).
+   - Split: only the top Soldat moves; bottom stays. Top may: capture diagonally (forward or back), OR step to an empty orthogonal neighbour.
+   - Diagonal split without capture is illegal.
+
+I) Hot-seat v1: single board, White at bottom (no flip). Per-player fixed orientation comes with multiplayer clients later.
+
+J) Clock: selectable 5+3 or 10+5 (minutes + Fischer increment seconds). Clock switches after a successful turn.
+
+K) UI language English; piece names German; letters: V J T S K I P.
+
+L) No en passant, no castling. Logging rejects illegal attempts with a clear reason.
+
+================================================================================
+I. DAS SCHLACHTFELD
+================================================================================
+Das Feld ist ein Quadrat von zehn mal zehn Linien, koordiniert von A1 bis J10.
+Die unteren drei Reihen (1–3) bilden das Heerlager des Weißen, die oberen drei Reihen (8–10) das Heerlager des Schwarzen.
+Hauptfiguren dürfen im Setup nur auf den eigenen Reihen 1–2 bzw. 10–9 stehen (nie die dritte Heerlager-Reihe).
+Das dazwischenliegende Mittelfeld (Reihen 4–7) ist zunächst unberührtes Land — später Schauplatz der Entscheidung und Reserve-Drops.
+Das Brett ist kariert, wie im klassischen Schach, um die Diagonalen der Schützen sichtbar zu machen.
+
+II. DIE HEERSCHAREN
+Jeder Feldherr führt ins Gefecht (v3.1 defaults):
+
+Figur          On board (min)   Reserve (default)   Pflicht
+Das Volk       1                0                   Must place
+Die Jugend     1                0                   Must place
+Tower          2                0–1                 At least 2; 3rd optional (from reserve)
+Schütze        2                0–1                 At least 2; 3rd optional
+Kavallerie     2                0–1                 At least 2; 3rd optional
+Infanterie     2                0–1                 At least 2; 3rd optional
+Soldaten       15               0                   5 doubles + 5 singles on fixed files
+
+Default total: 25 on board + 4 in reserve (standard figures only). Extensible for future piece types.
+
+III. PHASE I — DIE AUFSTELLUNG
+III.1 Die Soldatenformation
+Die zehn Basis-Felder sind jede Partie gleich (Zigzag, siehe Amendment B). Sie erscheinen automatisch als Einzelsoldaten.
+Jeder Spieler wählt genau fünf dieser Linien als Doppelsoldaten (zwei Soldaten auf demselben Feld). Danach stehen 15 Soldaten auf dem Brett, keiner in der Reserve.
+Soldaten stehen im Setup nur auf den erlaubten Soldaten-Reihen (nie Reihe 1 / 10).
+
+III.2 Die Hauptfiguren
+Nach der Soldaten-Wahl eröffnet Weiß die Aufstellung der Hauptfiguren. Danach abwechselnd je eine Figur.
+Pflicht: Volk, Jugend, je mindestens 2× Tower/Schütze/Kavallerie/Infanterie.
+Platzierung nur auf eigenen Reihen 1–2 (Weiß) bzw. 10–9 (Schwarz), leere Felder, eigenes Heerlager.
+Nach erfüllter Pflicht darf ein Spieler Passen. Der Gegner darf weiter setzen (auch 3. Exemplare).
+Nicht gesetzte Standardfiguren bleiben in der Reserve für die Spielphase.
+
+III.3 Ende der Aufstellungsphase
+Setup endet, wenn beide Spieler gepasst haben (oder nichts mehr setzen wollen/können).
+Reserve-Figuren sind ab der Spielphase einsetzbar.
+
+IV. PHASE II — DAS SPIEL
+IV.1 Zugreihenfolge
+Weiß eröffnet. Streng zugweise. Ein Zug = genau eine Handlung. Chess-clock (5+3 oder 10+5) läuft für den Spieler am Zug; nach legalem Zug wechseln Zugrecht und Uhr.
+
+IV.2 Zugtypen
+A) Marschieren: Figur/Stapel bewegen — inkl. Schlagen, Fusionieren, Doppelsoldat-Zug/Split, Schuss (3er-Stapel).
+B) Verstärken: Reserve auf leeres Mittelfeld (4–7) oder eigenen Stapel (nicht auf Volk/Jugend; max Höhe 3). Kein Schlagen beim Legen.
+
+IV.3 Ausgeschlossene Regeln
+Kein En Passant, keine Rochade.
+
+IV.4 Zugzwang
+Kein Aussetzen in der Spielphase. Kein legaler Zug → Patt (Remis), sofern Volk nicht im Schach.
+
+IV.5 Remis
+- Dreifache Stellungswiederholung (Brett + Stapel + Reserve + Seite am Zug)
+- Patt
+- (IX.4 unzureichendes Material: v1 nicht geprüft)
+
+IV.6 Zugzeit
+Uhr: 5+3 oder 10+5. Flag → Verlust.
+
+V. DIE GRUNDLEHREN DER BEWEGUNG
+V.1 Die Einzelfiguren
+Figur        Bewegung
+Das Volk     Ein Feld jede Richtung; darf nicht auf bedrohtes Feld.
+Die Jugend   Beliebig weit orthogonal + diagonal (wie Dame).
+Tower        Beliebig weit orthogonal.
+Schütze      Beliebig weit diagonal.
+Kavallerie   (3,2)-Sprung; springt.
+Infanterie   (2,2)-Sprung; springt.
+Soldat       1 oder 2 vorwärts (beide Felder frei). Schlägt diagonal vorwärts und rückwärts. Nie rückwärts geradeaus.
+
+V.2 Das Volk im Schach
+Volk darf nicht auf bedrohtes Feld. Züge, die das eigene Volk im Schach lassen/führen, sind illegal.
+
+V.3 Der Soldat
+Doppelschritt nur wenn Zwischenfeld frei. Schlag diagonal vorwärts und rückwärts.
+
+VI. DIE KUNST DES STAPELS
+VI.1 Fusion
+Auf eigenes Feld ziehen → Stapel. Max 3 Figuren. Oberste Figur bestimmt Move-Set (außer Sonderkombinationen).
+
+VI.2 Hierarchie
+Volk und Jugend müssen oben sein; niemand stackt auf sie.
+Volk/Jugend dürfen auf andere stacken außer: Volk nicht auf Soldat; Volk/Jugend nicht aufeinander (außer Doppeljugend nur durch Umwandlung).
+Soldaten können Basis sein und einander tragen (Doppelsoldat). Nicht-Soldat darf auf Soldat.
+
+VI.3 Schlagen von Stapeln
+Normaler Schlag: gesamter Stapel stirbt.
+Schuss (3er): unterste + mittlere sterben; oberste bleibt. 2er geschossen → beide tot. 1er geschossen → tot.
+Schuss darf gegnerisches Volk nie treffen. Eigene und gegnerische Figuren blockieren Gleit-Schüsse auf der Bahn; Springer-Schüsse springen.
+
+VI.4 Auseinandernehmen
+Gleiche Figuren im 2er (außer Aufteilungsregeln Soldat): nicht trennen.
+3er: zwei identische, die als Paar bewegt werden dürfen (nicht die „falsche“ Trennung), können gemeinsam abziehen; oder die obere andersartige Figur zieht allein ab.
+Verschiedene Figuren: obere zieht mit eigenem Move-Set ab.
+Soldat als Basis unter Nicht-Soldat: passiv (keine Soldatenrechte), bis die obere Figur abzieht.
+
+VII. DIE WANDLUNGEN
+VII.1 Gleiche Figuren — Höhere Formen
+K+K Doppelkavallerie: zwei (3,2)-Sprünge; Zwischenfeld frei; Schlag nur Endfeld.
+I+I Doppelinfanterie: zwei (2,2); analog.
+S+S Doppelschütze: bewegt wie Jugend.
+T+T Doppeltower: orthogonal, genau eine 90°-Abzweigung; kein Zurück zum Start; nicht durch eigene Figuren; bei Schlag auf dem Weg Stop.
+J+J Doppeljugend: nur aus Doppelsoldat-Umwandlung; zwei Teilzüge gleicher Art (beide ortho oder beide diag); max ein Schlag; auf eigenen Soldaten → Stop und 3er.
+
+VII.2 Verschiedene Figuren
+Tower+Schütze → wie Jugend.
+Kavallerie+Infanterie → Spieler wählt (3,2) oder (2,2) pro Zug.
+Jugend oben → Jugend-Move; abziehbar.
+Volk oben → Volk-Move; abziehbar.
+Volk+Soldat verboten.
+
+VII.3 Dreierstapel und Schießen
+Bei Entstehung: einmal Schuss in Bedrohungsreichweite der obersten Figur (ohne Hinziehen).
+Schuss verbraucht bis Stapel vollständig aufgelöst und neu als 3er gebildet.
+Beim Bilden eines 3ers darf gegnerisches Volk durch die neue Bedrohung nicht im Schach/bedroht stehen (nur 3er-Einschränkung).
+Nach Reserve-3er: wählen Schuss ODER Marsch (nicht beides) als Zug.
+3er kann nicht weiter gestackt werden.
+
+VIII. DER SOLDAT UND SEINE GEHEIMNISSE
+VIII.1 Doppelsoldat — Einheit
+Vorwärts 1 oder 2 (Felder frei). Diagonal ein Feld schlagen (vor/zurück) ohne Split → bleibt Doppelsoldat.
+
+VIII.2 Doppelsoldat — Split
+Nur oberer Soldat bewegt sich; unterer bleibt.
+Legal: diagonaler Schlag (vor oder zurück), ODER leeres orthogonales Nachbarfeld.
+Diagonal ohne Schlag verboten. Beide Zielfelder bei „beiden bewegen“ entfällt — Split bewegt nur einen.
+
+VIII.3–VIII.7
+Rand: Split/Zug muss auf dem Brett bleiben.
+Endreihe Weiß=10 / Schwarz=1:
+- Ein Soldat: wird zu T/S/K/I (Wahl) oder Reserve darauf stacken.
+- Doppelsoldat beide auf Endreihe / Aufteilung dorthin: einer → Jugend, anderer → T/S/K/I (nicht Volk).
+- Gestapelter Soldat am Ende: Reserve zum 3er oder Soldat umwandeln (obere Figur bleibt allein).
+Passive Basis unter Nicht-Soldat: Rechte erloschen bis Abzug.
+
+IX. ÜBER LEBEN UND TOD
+IX.1 Schach — Volk bedroht, wenn Gegner es im nächsten Zug schlagen könnte (Schuss trifft Volk nie).
+IX.2 Schachmatt — keine legale Abwehr → Verlust.
+IX.3 Patt — kein legaler Zug, Volk nicht im Schach → Remis.
+IX.4 Unzureichendes Material — v1 SKIP.
+IX.5 Reserve leer und kein Marsch → Patt wenn nicht im Schach.
+
+X. DIE RESERVE
+Offen sichtbar. Drop: leeres Mittelfeld 4–7 oder eigener Stapel (Regeln IV.2). Kein Drop auf Volk/Jugend/vollen 3er.
+
+XI. SONDERFÄLLE
+Wie v3.0, außer Widersprüche zu v3.1 Amendments (Amendments gewinnen).
+Jugend+Jugend stacken aus Setup: verboten; Doppeljugend nur Umwandlung.
+Soldaten-Reserve: entfällt (0).
+Schuss-Pfad: Gleiter blockiert durch Figuren; Springer nicht.
+
+XII. NOTATION
+e4, Kxe4, Te4↑, Pd5=d4 (split top→d4), Res-Sf4, 3T-e5*, +, #, a10=T
+Letters: V Volk, J Jugend, T Tower, S Schütze, K Kavallerie, I Infanterie, P Soldat.
+
+XIII. PRODUCT NOTES (v1)
+- Local hot-seat, White orientation fixed.
+- Reject illegal moves with English reason strings in the log.
+- Architecture: pure engine API suitable for later multiplayer + 3D renderer swap.
