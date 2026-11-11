@@ -1,0 +1,36 @@
+{
+  "group_id": "e179dbad-43d5-46a9-952f-51837b64964b",
+  "states": [
+    {
+      "character": {
+        "id": "47c9f97f-cec8-4525-8b61-2b02c6f279f3",
+        "name": "Idle",
+        "prompt": "mache einen Bauern wie in Schach.",
+        "size": {
+          "width": 96,
+          "height": 96
+        },
+        "template_id": "custom",
+        "directions": 8,
+        "view": "high top-down",
+        "created_at": "2026-11-11T16:19:52.944060+00:00"
+      },
+      "folder": "Idle",
+      "frames": {
+        "rotations": {
+          "south": "Idle/rotations/south.png",
+          "south-east": "Idle/rotations/south-east.png",
+          "east": "Idle/rotations/east.png",
+          "north-east": "Idle/rotations/north-east.png",
+          "north": "Idle/rotations/north.png",
+          "north-west": "Idle/rotations/north-west.png",
+          "west": "Idle/rotations/west.png",
+          "south-west": "Idle/rotations/south-west.png"
+        },
+        "animations": {}
+      }
+    }
+  ],
+  "export_version": "3.1",
+  "export_date": "2026-11-11T17:05:26.051533"
+}

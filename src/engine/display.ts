@@ -1,6 +1,7 @@
 import type { Piece, PieceType, Stack } from './types'
 import { PIECE_LETTER } from './types'
 import { effectiveMover } from './moves'
+import { displayName } from '../sprites/catalog'
 
 /** Single glyph / short code for UI (fusions get their own identity). */
 export function stackBadge(stack: Stack): { code: string; title: string; fused: boolean } {
@@ -17,9 +18,9 @@ export function stackBadge(stack: Stack): { code: string; title: string; fused: 
     case 'double-jugend':
       return { code: 'DJ', title: 'Doppeljugend', fused: true }
     case 'tower-schuetze':
-      return { code: 'TS', title: 'Tower+Schütze', fused: true }
+      return { code: 'TS', title: 'Turm+Bishop', fused: true }
     case 'kav-inf':
-      return { code: 'KI', title: 'Kavallerie+Infanterie', fused: true }
+      return { code: 'KI', title: 'Ritter+Drache', fused: true }
     default:
       break
   }
@@ -30,13 +31,13 @@ export function stackBadge(stack: Stack): { code: string; title: string; fused: 
     // Show top letter prominently; height as dots in UI
     return {
       code: PIECE_LETTER[primary],
-      title: stack.map((p) => p.type).join(' / '),
+      title: stack.map((p) => displayName(p.type)).join(' / '),
       fused: false,
     }
   }
   return {
     code: PIECE_LETTER[primary],
-    title: primary,
+    title: displayName(primary),
     fused: false,
   }
 }

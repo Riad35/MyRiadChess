@@ -1,0 +1,36 @@
+{
+  "group_id": "77867d77-74b7-47fe-90e5-1b55f1b1bc28",
+  "states": [
+    {
+      "character": {
+        "id": "59b31f41-656b-4ad8-a1fa-9f4859e5778c",
+        "name": "Idle",
+        "prompt": "mache einen Turm wie in Schach. ",
+        "size": {
+          "width": 96,
+          "height": 96
+        },
+        "template_id": "custom",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-11T16:40:54.035132+00:00"
+      },
+      "folder": "Idle",
+      "frames": {
+        "rotations": {
+          "south": "Idle/rotations/south.png",
+          "south-east": "Idle/rotations/south-east.png",
+          "east": "Idle/rotations/east.png",
+          "north-east": "Idle/rotations/north-east.png",
+          "north": "Idle/rotations/north.png",
+          "north-west": "Idle/rotations/north-west.png",
+          "west": "Idle/rotations/west.png",
+          "south-west": "Idle/rotations/south-west.png"
+        },
+        "animations": {}
+      }
+    }
+  ],
+  "export_version": "3.1",
+  "export_date": "2026-11-11T17:05:05.706703"
+}
