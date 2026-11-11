@@ -36,6 +36,15 @@ import {
   type SavedComposition,
 } from './lib/prefs'
 import { RULES_SECTIONS, UNIT_SCENARIOS } from './content/unitScenarios'
+import {
+  PieceSprite,
+  defaultFacing,
+  displayName,
+  facingFromDelta,
+  spriteDirForViewer,
+  type SpriteDir,
+  type ViewerOrientation,
+} from './sprites'
 
 type Screen = 'menu' | 'settings' | 'testing' | 'compositions' | 'game'
 type TestingTab = 'guide-rules' | 'guide-units' | 'testmap'
@@ -64,6 +73,19 @@ export default function App() {
   const [spawnColor, setSpawnColor] = useState<Color>('white')
   const [spawnHeight, setSpawnHeight] = useState(1)
   const [gameMode, setGameMode] = useState<'match' | 'sandbox'>('match')
+  /** Board-absolute facing per piece id; missing → default by color. */
+  const [facingById, setFacingById] = useState<Record<string, SpriteDir>>({})
+  /** Hot-seat White-at-bottom today; remaps when the board is turned. */
+  const viewerOrientation: ViewerOrientation = 'white-south'
+
+  const rememberFacing = useCallback((pieceIds: string[], dir: SpriteDir | null) => {
+    if (!dir || pieceIds.length === 0) return
+    setFacingById((prev) => {
+      const next = { ...prev }
+      for (const id of pieceIds) next[id] = dir
+      return next
+    })
+  }, [])
 
   const announce = useCallback(
     (text: string) => {
@@ -97,6 +119,7 @@ export default function App() {
     const s = createInitialState(timeControl)
     setState(s)
     setSel(null)
+    setFacingById({})
     setPlacePiece('Volk')
     setScreen('game')
     announce('SETTING PHASE')
@@ -107,6 +130,7 @@ export default function App() {
     const s = createMirroredQuickStart(timeControl)
     setState(s)
     setSel(null)
+    setFacingById({})
     setScreen('game')
     announce('BATTLE PHASE')
   }
@@ -115,6 +139,7 @@ export default function App() {
     setGameMode('sandbox')
     setState(build())
     setSel(null)
+    setFacingById({})
     setTestingTab('guide-units')
     setScreen('game')
     announce('GUIDE SCENARIO')
@@ -124,6 +149,7 @@ export default function App() {
     setGameMode('sandbox')
     setState(createEmptyPlayState(timeControl))
     setSel(null)
+    setFacingById({})
     setTestingTab('testmap')
     setScreen('game')
     announce('TESTMAP')
@@ -215,6 +241,15 @@ export default function App() {
               : hit.mode === 'kavallerie' || hit.mode === 'infanterie'
                 ? hit.mode
                 : 'unit'
+          const fromStack = state.board[sel.file]![sel.rank]
+          const dir = facingFromDelta(file - sel.file, rank - sel.rank)
+          if (fromStack && dir) {
+            const ids =
+              mode === 'split'
+                ? [top(fromStack)!.id]
+                : fromStack.map((p) => p.id)
+            rememberFacing(ids, dir)
+          }
           dispatch({
             type: 'march',
             fromFile: sel.file,
@@ -448,6 +483,7 @@ export default function App() {
               announce('SETTING PHASE')
             }
             setSel(null)
+            setFacingById({})
           }}
         >
           Restart
@@ -500,7 +536,7 @@ export default function App() {
                       disabled={left <= 0}
                       onClick={() => setPlacePiece(p)}
                     >
-                      {PIECE_LETTER[p]} <small>×{left}</small>
+                      {displayName(p)} <small>×{left}</small>
                     </button>
                   )
                 })}
@@ -557,7 +593,7 @@ export default function App() {
               <div className="piece-picker">
                 {(['Volk', 'Jugend', ...STANDARD_TYPES, 'Soldat'] as PieceType[]).map((p) => (
                   <button key={p} type="button" className={spawnType === p ? 'active' : ''} onClick={() => setSpawnType(p)}>
-                    {PIECE_LETTER[p]}
+                    {displayName(p)}
                   </button>
                 ))}
               </div>
@@ -621,6 +657,8 @@ export default function App() {
             chooser={chooser}
             checkSquare={checkSquare}
             showCoords={settings.showCoords}
+            facingById={facingById}
+            viewerOrientation={viewerOrientation}
             onSquareClick={onSquareClick}
           />
         </main>
@@ -810,7 +848,7 @@ function ArmyPanel({ state, color, active }: { state: GameState; color: Color; a
             return (
               <li key={p} className={need ? 'must' : ''}>
                 <span>
-                  {PIECE_LETTER[p]} {p}
+                  {PIECE_LETTER[p]} {displayName(p)}
                 </span>
                 <span>{left} left</span>
               </li>
@@ -849,7 +887,7 @@ function ReservePanel({
                 disabled={state.phase !== 'play' || state.turn !== c}
                 onClick={() => onPick(p)}
               >
-                {PIECE_LETTER[p]}
+                {displayName(p)}
               </button>
             ))}
           </div>
@@ -897,6 +935,8 @@ function Board({
   chooser,
   checkSquare,
   showCoords,
+  facingById,
+  viewerOrientation,
   onSquareClick,
 }: {
   state: GameState
@@ -907,10 +947,18 @@ function Board({
   chooser: Color
   checkSquare: { file: number; rank: number } | null
   showCoords: boolean
+  facingById: Record<string, SpriteDir>
+  viewerOrientation: ViewerOrientation
   onSquareClick: (file: number, rank: number) => void
 }) {
-  const ranks = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
-  const files = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  const ranks =
+    viewerOrientation === 'white-south'
+      ? [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+      : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  const files =
+    viewerOrientation === 'white-south'
+      ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      : [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
   return (
     <div className="board" role="grid" aria-label="Schach 2 board">
       {ranks.map((rank) =>
@@ -920,6 +968,13 @@ function Board({
           const key = `${file},${rank}`
           const t = targetMap.get(key)
           const badge = stack ? stackBadge(stack) : null
+          const piece = stack ? top(stack)! : null
+          const boardFacing =
+            piece != null
+              ? (facingById[piece.id] ?? defaultFacing(piece.color))
+              : null
+          const viewDir =
+            boardFacing != null ? spriteDirForViewer(boardFacing, viewerOrientation) : null
           return (
             <button
               key={key}
@@ -942,15 +997,24 @@ function Board({
             >
               {showCoords && (
                 <span className="coord">
-                  {file === 0 ? rank + 1 : ''}
-                  {rank === 0 ? 'abcdefghij'[file] : ''}
+                  {(viewerOrientation === 'white-south' ? file === 0 : file === 9)
+                    ? rank + 1
+                    : ''}
+                  {(viewerOrientation === 'white-south' ? rank === 0 : rank === 9)
+                    ? 'abcdefghij'[file]
+                    : ''}
                 </span>
               )}
-              {stack && badge && (
-                <span className={`stack color-${top(stack)!.color} ${badge.fused ? 'fused' : ''}`}>
-                  <span className="badge">{badge.code}</span>
-                  {stack.length > 1 && !badge.fused && <span className="height">×{stack.length}</span>}
-                </span>
+              {stack && badge && piece && viewDir && (
+                <PieceSprite
+                  type={piece.type}
+                  color={piece.color}
+                  dir={viewDir}
+                  fused={badge.fused}
+                  code={badge.code}
+                  height={stack.length}
+                  title={badge.title}
+                />
               )}
             </button>
           )

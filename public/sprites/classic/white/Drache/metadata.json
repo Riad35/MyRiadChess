@@ -1,0 +1,36 @@
+{
+  "group_id": "3ac78660-87c8-45d5-baaa-dfdeead0278c",
+  "states": [
+    {
+      "character": {
+        "id": "01ca900e-02c9-4306-ae1b-3e9cda592d94",
+        "name": "Idle",
+        "prompt": "mache einen Drachen, nur den Kopf kein k\u00f6rper oder gliedma\u00dfen, wie in Schach. ",
+        "size": {
+          "width": 96,
+          "height": 96
+        },
+        "template_id": "custom",
+        "directions": 8,
+        "view": "low top-down",
+        "created_at": "2026-11-11T16:36:49.919325+00:00"
+      },
+      "folder": "Idle",
+      "frames": {
+        "rotations": {
+          "south": "Idle/rotations/south.png",
+          "south-east": "Idle/rotations/south-east.png",
+          "east": "Idle/rotations/east.png",
+          "north-east": "Idle/rotations/north-east.png",
+          "north": "Idle/rotations/north.png",
+          "north-west": "Idle/rotations/north-west.png",
+          "west": "Idle/rotations/west.png",
+          "south-west": "Idle/rotations/south-west.png"
+        },
+        "animations": {}
+      }
+    }
+  ],
+  "export_version": "3.1",
+  "export_date": "2026-11-11T17:05:07.247899"
+}
