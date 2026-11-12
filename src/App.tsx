@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   applyAction,
   createInitialState,
+  carriedStack,
   legalTargets,
   setupPlaceSquares,
   algebraic,
@@ -324,7 +325,7 @@ export default function App() {
     if (!targetMap.has(`${hoverSq.file},${hoverSq.rank}`)) return null
     const stack = state.board[sel.file]?.[sel.rank]
     if (!stack) return null
-    return { file: hoverSq.file, rank: hoverSq.rank, stack }
+    return { file: hoverSq.file, rank: hoverSq.rank, stack: carriedStack(stack) }
   }, [hoverSq, sel, state, targetMap])
 
   const movableSquares = useMemo(() => {
@@ -1115,6 +1116,19 @@ function NoticePopup({
   blocking: boolean
   onDone: () => void
 }) {
+  if (!blocking) return <CheckToast title={title} onDone={onDone} />
+  return <BlockingNotice title={title} onDone={onDone} />
+}
+
+function CheckToast({ title, onDone }: { title: string; onDone: () => void }) {
+  return (
+    <div className="check-toast" role="status" onAnimationEnd={onDone}>
+      <span>{title}</span>
+    </div>
+  )
+}
+
+function BlockingNotice({ title, onDone }: { title: string; onDone: () => void }) {
   const done = useRef(onDone)
   done.current = onDone
   useEffect(() => {
@@ -1122,11 +1136,7 @@ function NoticePopup({
     return () => window.clearTimeout(id)
   }, [title])
   return (
-    <div
-      className={blocking ? 'popup-layer popup-flash' : 'popup-layer popup-check'}
-      onClick={blocking ? onDone : undefined}
-      role="status"
-    >
+    <div className="popup-layer popup-flash" onClick={onDone} role="status">
       <div className="popup-card">
         <h2>{title}</h2>
       </div>

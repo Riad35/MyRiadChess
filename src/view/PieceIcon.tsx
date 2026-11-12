@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Color, PieceType } from '../engine'
-import { loadSpriteLibrary, type Facing, type FusionId } from './sprites'
+import { facingFrames, loadSpriteLibrary, type Facing, type FusionId } from './sprites'
 
 export function PieceIcon({
   type,
@@ -18,7 +18,7 @@ export function PieceIcon({
     let live = true
     loadSpriteLibrary()
       .then((lib) => {
-        const frame = fusion ? lib.fusions[fusion][color][facing] : lib.pieces[type][color][facing]
+        const frame = facingFrames(lib, type, color, fusion)[facing]
         if (live) setUrl(frame.url)
       })
       .catch(() => {

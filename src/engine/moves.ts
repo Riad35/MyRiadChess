@@ -85,6 +85,24 @@ function lockedFigure(stack: Stack): boolean {
   return LOCKED_FIGURES.has(effectiveMover(stack).combo)
 }
 
+/**
+ * Pieces that actually leave the square.
+ * Locked pairs and a Doppelsoldat move together. Otherwise only the top
+ * group leaves, and whatever sits underneath stays where it is.
+ */
+export function carriedStack(stack: Stack): Stack {
+  if (stack.length <= 1) return stack
+  if (stack.length === 2) {
+    if (lockedFigure(stack) || stack.every((p) => p.type === 'Soldat')) return stack
+    return [stack[1]!]
+  }
+  const bottom = stack[0]!
+  const mid = stack[stack.length - 2]!
+  const topPiece = stack[stack.length - 1]!
+  if (mid.type === topPiece.type && bottom.type !== topPiece.type) return [mid, topPiece]
+  return [topPiece]
+}
+
 function canFuseOnto(moving: Stack, target: Stack): string | null {
   if (lockedFigure(moving) || lockedFigure(target)) return 'This figure stays as it is'
   if (target.length + moving.length > 3) return 'Cannot stack above height 3'
@@ -404,10 +422,10 @@ export function generateMovesFrom(
   const stack = cell(state, file, rank)
   if (!stack || stack.length === 0) return []
   const color = top(stack)!.color
-  const { primary, combo } = effectiveMover(stack)
   const shoot = !!opts?.asShoot
 
   if (shoot) {
+    const { primary, combo } = effectiveMover(stack)
     // shoot uses top pattern; cannot hit enemy König
     let raw: Target[] = []
     if (combo === 'double-bishop' || combo === 'bishop-turm' || primary === 'Dame') {
@@ -450,47 +468,56 @@ export function generateMovesFrom(
     })
   }
 
-  if (primary === 'Soldat' || (stack.every((p) => p.type === 'Soldat') && stack.length <= 2)) {
-    if (top(stack)!.type === 'Soldat') return soldatTargets(state, color, file, rank, stack)
+  const moving = carriedStack(stack)
+  const { primary, combo } = effectiveMover(moving)
+  const finish = (targets: Target[]) =>
+    moving.length < stack.length ? targets.filter((t) => t.kind !== 'split') : targets
+
+  if (primary === 'Soldat' || (moving.every((p) => p.type === 'Soldat') && moving.length <= 2)) {
+    if (top(moving)!.type === 'Soldat') return finish(soldatTargets(state, color, file, rank, moving))
   }
 
   switch (combo) {
     case 'double-turm':
-      return doubleTurmTargets(state, color, file, rank, stack)
+      return finish(doubleTurmTargets(state, color, file, rank, moving))
     case 'double-ritter':
-      return doubleJumpTargets(state, color, file, rank, KAV_OFFSETS, stack)
+      return finish(doubleJumpTargets(state, color, file, rank, KAV_OFFSETS, moving))
     case 'double-drache':
-      return doubleJumpTargets(state, color, file, rank, INF_OFFSETS, stack)
+      return finish(doubleJumpTargets(state, color, file, rank, INF_OFFSETS, moving))
     case 'double-bishop':
     case 'bishop-turm':
-      return slide(state, color, file, rank, ALL8, stack)
+      return finish(slide(state, color, file, rank, ALL8, moving))
     case 'double-dame':
       // simplified: two queen-legs same modality generated as two-step slides
-      return doubleDameTargets(state, color, file, rank, stack)
+      return finish(doubleDameTargets(state, color, file, rank, moving))
     case 'drache-ritter': {
       // Show both patterns — no manual mode toggle (chess-like click-to-move).
       if (opts?.mode === 'drache') {
-        return jumps(state, color, file, rank, INF_OFFSETS, stack).map((t) => ({
-          ...t,
-          mode: 'drache' as const,
-        }))
+        return finish(
+          jumps(state, color, file, rank, INF_OFFSETS, moving).map((t) => ({
+            ...t,
+            mode: 'drache' as const,
+          })),
+        )
       }
       if (opts?.mode === 'ritter') {
-        return jumps(state, color, file, rank, KAV_OFFSETS, stack).map((t) => ({
-          ...t,
-          mode: 'ritter' as const,
-        }))
+        return finish(
+          jumps(state, color, file, rank, KAV_OFFSETS, moving).map((t) => ({
+            ...t,
+            mode: 'ritter' as const,
+          })),
+        )
       }
-      return [
-        ...jumps(state, color, file, rank, KAV_OFFSETS, stack).map((t) => ({
+      return finish([
+        ...jumps(state, color, file, rank, KAV_OFFSETS, moving).map((t) => ({
           ...t,
           mode: 'ritter' as const,
         })),
-        ...jumps(state, color, file, rank, INF_OFFSETS, stack).map((t) => ({
+        ...jumps(state, color, file, rank, INF_OFFSETS, moving).map((t) => ({
           ...t,
           mode: 'drache' as const,
         })),
-      ]
+      ])
     }
     default:
       break
@@ -507,24 +534,24 @@ export function generateMovesFrom(
         if (!occ) out.push({ file: f, rank: r, kind: 'move' })
         else if (top(occ)!.color !== color) out.push({ file: f, rank: r, kind: 'capture' })
         else {
-          const err = canFuseOnto(stack, occ)
+          const err = canFuseOnto(moving, occ)
           if (!err) out.push({ file: f, rank: r, kind: 'fuse' })
         }
       }
-      return out
+      return finish(out)
     }
     case 'Dame':
-      return slide(state, color, file, rank, ALL8, stack)
+      return finish(slide(state, color, file, rank, ALL8, moving))
     case 'Turm':
-      return slide(state, color, file, rank, ORTHO, stack)
+      return finish(slide(state, color, file, rank, ORTHO, moving))
     case 'Bishop':
-      return slide(state, color, file, rank, DIAG, stack)
+      return finish(slide(state, color, file, rank, DIAG, moving))
     case 'Ritter':
-      return jumps(state, color, file, rank, KAV_OFFSETS, stack)
+      return finish(jumps(state, color, file, rank, KAV_OFFSETS, moving))
     case 'Drache':
-      return jumps(state, color, file, rank, INF_OFFSETS, stack)
+      return finish(jumps(state, color, file, rank, INF_OFFSETS, moving))
     case 'Soldat':
-      return soldatTargets(state, color, file, rank, stack)
+      return finish(soldatTargets(state, color, file, rank, moving))
     default:
       return []
   }

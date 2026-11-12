@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { effectiveMover, type Color, type PieceType, type Stack } from '../engine'
+import { carriedStack, effectiveMover, stackBadge, type Color, type PieceType, type Stack } from '../engine'
 
 export const FACINGS = [
   'south',
@@ -24,16 +24,18 @@ const SPRITE_FILE: Record<PieceType, string> = {
   Soldat: 'soldat',
 }
 
-export type FusionId = 'viking' | 'bishop-tower' | 'noble-knight' | 'elder-dragon'
+export type FusionId = 'viking' | 'bishop-tower' | 'noble-knight' | 'elder-dragon' | 'pope' | 'double-turm'
 
 const FUSION_FILE: Record<FusionId, string> = {
   viking: 'viking',
   'bishop-tower': 'bishop-tower',
   'noble-knight': 'noble-knight',
   'elder-dragon': 'elder-dragon',
+  pope: 'pope',
+  'double-turm': 'double-turm',
 }
 
-const FUSIONS: FusionId[] = ['viking', 'bishop-tower', 'noble-knight', 'elder-dragon']
+const FUSIONS: FusionId[] = ['viking', 'bishop-tower', 'noble-knight', 'elder-dragon', 'pope', 'double-turm']
 
 export type SpriteFrame = {
   texture: THREE.CanvasTexture
@@ -57,8 +59,40 @@ export function fusionIdFor(stack: Stack): FusionId | null {
   if (combo === 'bishop-turm') return 'bishop-tower'
   if (combo === 'double-drache') return 'elder-dragon'
   if (combo === 'double-ritter') return 'noble-knight'
+  if (combo === 'double-bishop') return 'pope'
+  if (combo === 'double-turm') return 'double-turm'
   if (stack.every((p) => p.type === 'Soldat')) return 'viking'
   return null
+}
+
+export type StackBody = {
+  pieces: Stack
+  fusion: FusionId | null
+  /** Draw this piece's frames. Turm+Bishop uses the Dame, not the bishop-tower sheet. */
+  asType?: PieceType
+}
+
+/** Bottom to top. A pair that stays together is one body; the piece on top is another. */
+export function stackBodies(stack: Stack): StackBody[] {
+  const carry = carriedStack(stack)
+  const remain = stack.slice(0, stack.length - carry.length)
+  return [...bodiesFor(remain), ...bodiesFor(carry)]
+}
+
+function bodiesFor(part: Stack): StackBody[] {
+  if (part.length === 0) return []
+  const fusion = part.length >= 2 ? fusionIdFor(part) : null
+  if (fusion === 'bishop-tower') return [{ pieces: part, fusion: null, asType: 'Dame' }]
+  if (fusion) return [{ pieces: part, fusion }]
+  if (part.length === 2 && stackBadge(part).fused) return [{ pieces: part, fusion: null }]
+  return part.map((piece) => ({ pieces: [piece], fusion: null }))
+}
+
+/** Turm+Bishop is a Dame, so that fusion uses the queen frames. */
+export function facingFrames(lib: SpriteLibrary, type: PieceType, color: Color, fusion?: FusionId | null): FacingSet {
+  if (fusion === 'bishop-tower') return lib.pieces.Dame[color]
+  if (fusion) return lib.fusions[fusion][color]
+  return lib.pieces[type][color]
 }
 
 let loading: Promise<SpriteLibrary> | null = null

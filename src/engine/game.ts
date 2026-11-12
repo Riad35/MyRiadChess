@@ -28,6 +28,7 @@ import {
   hasMinimumArmy,
 } from './state'
 import {
+  carriedStack,
   generateMovesFrom,
   isSquareAttacked,
   isKoenigInCheck,
@@ -523,9 +524,9 @@ function applyMarchMut(
     return
   }
 
-  // move entire stack
-  const moving = from
-  state.board[fromFile]![fromRank] = null
+  const carry = carriedStack(from)
+  const moving = from.splice(from.length - carry.length, carry.length)
+  if (from.length === 0) state.board[fromFile]![fromRank] = null
   if (!to) {
     state.board[toFile]![toRank] = moving
   } else if (top(to)!.color !== top(moving)!.color) {

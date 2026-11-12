@@ -4,13 +4,14 @@ import { OrbitControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import type { Color, GameState, PieceType } from '../engine'
-import { soldierBaseRank, stackBadge } from '../engine'
+import { carriedStack, soldierBaseRank, stackBadge } from '../engine'
 import {
   FACINGS,
+  facingFrames,
   facingIndex,
-  fusionIdFor,
   hoverSilhouette,
   loadSpriteLibrary,
+  stackBodies,
   type FusionId,
   type SpriteLibrary,
 } from './sprites'
@@ -166,6 +167,7 @@ function Scene(props: BoardProps) {
     props.dragging && props.state.board[props.dragging.file]?.[props.dragging.rank]
       ? props.state.board[props.dragging.file]![props.dragging.rank]
       : null
+  const heldCarry = heldStack ? carriedStack(heldStack) : null
   return (
     <>
       <DragSession armed={armed} hoverRef={hoverRef} onDragStart={props.onDragStart} onDragEnd={props.onDragEnd} />
@@ -255,10 +257,10 @@ function Scene(props: BoardProps) {
           ghost
         />
       )}
-      {lib && heldStack && props.dragging && (
+      {lib && heldCarry && props.dragging && (
         <StackView
           key={`drag-${props.dragging.file}-${props.dragging.rank}`}
-          stack={heldStack}
+          stack={heldCarry}
           file={props.dragging.file}
           rank={props.dragging.rank}
           lib={lib}
@@ -285,9 +287,11 @@ const FOOT_PAD: Record<string, number> = {
   'bishop-tower': 0.125,
   dame: 0.177,
   drache: 0.167,
+  'double-turm': 0.125,
   'elder-dragon': 0.073,
   koenig: 0.073,
   'noble-knight': 0.094,
+  pope: 0.073,
   ritter: 0.115,
   soldat: 0.208,
   turm: 0.094,
@@ -306,7 +310,8 @@ const SPRITE_KEY: Record<PieceType, string> = {
 
 /** One card per square. `seat` is how far the feet sit below the card center. */
 function pieceStand(type: PieceType, fusion?: FusionId) {
-  const pad = FOOT_PAD[fusion ?? SPRITE_KEY[type]] ?? 0.12
+  const key = fusion === 'bishop-tower' ? 'dame' : (fusion ?? SPRITE_KEY[type])
+  const pad = FOOT_PAD[key] ?? 0.12
   return { size: PIECE_SIZE, seat: PIECE_SIZE * (0.5 - pad) }
 }
 
@@ -462,72 +467,75 @@ function StackView({
   held?: boolean
   followPointer?: boolean
 }) {
-  const fusion = fusionIdFor(stack)
-  const badge = stackBadge(stack)
-  const head = stack[stack.length - 1]!
-  if (fusion) {
-    const stand = pieceStand(head.type, fusion)
-    return (
-      <PieceMesh
-        fusion={fusion}
-        type={head.type}
-        color={head.color}
-        file={file}
-        rank={rank}
-        size={stand.size}
-        seat={stand.seat}
-        position={[file - 4.5, 0, rank - 4.5]}
-        lib={lib}
-        targetMap={targetMap}
-        onClick={onClick}
-        motion={motion}
-        motionRate={motionRate}
-        accent={accent}
-        canMove={canMove}
-        onHoverSquare={onHoverSquare}
-        onArmDrag={onArmDrag}
-        ghost={ghost}
-        held={held}
-        followPointer={followPointer}
-      />
-    )
-  }
-  const sideBySide = badge.fused && stack.length === 2
+  const departs = carriedStack(stack).length
+  const bodies = stackBodies(stack)
+  const shown = held ? (departs === stack.length ? [] : bodies.slice(0, -1)) : bodies
+  if (shown.length === 0) return null
   let lift = 0
-  const spots = stack.map((piece, i) => {
-    const stand = pieceStand(piece.type)
-    const x = sideBySide ? (i === 0 ? -0.16 : 0.16) : 0
+  const spots = shown.flatMap((body) => {
+    const paired = !body.fusion && !body.asType && body.pieces.length === 2
+    if (paired) {
+      const seats = body.pieces.map((piece) => pieceStand(piece.type))
+      const foot = lift
+      lift += Math.max(...seats.map((seat) => seat.seat)) * 1.15
+      return body.pieces.map((piece, i) => ({
+        key: piece.id,
+        type: piece.type,
+        fusion: undefined as FusionId | undefined,
+        color: piece.color,
+        x: i === 0 ? -0.16 : 0.16,
+        foot,
+        size: seats[i]!.size,
+        seat: seats[i]!.seat,
+      }))
+    }
+    const head = body.pieces[body.pieces.length - 1]!
+    const type = body.asType ?? head.type
+    const stand = pieceStand(type, body.fusion ?? undefined)
     const foot = lift
-    if (!sideBySide) lift += stand.seat * 1.15
-    return { x, foot, size: stand.size, seat: stand.seat }
+    lift += stand.seat * 1.15
+    return [
+      {
+        key: head.id,
+        type,
+        fusion: body.fusion ?? undefined,
+        color: head.color,
+        x: 0,
+        foot,
+        size: stand.size,
+        seat: stand.seat,
+      },
+    ]
   })
+  const lone = shown.length === 1 ? shown[0] : null
   return (
-    <group visible={!held}>
-      {stack.map((piece, i) => (
+    <group>
+      {spots.map((spot) => (
         <PieceMesh
-          key={piece.id}
-          type={piece.type}
-          color={piece.color}
+          key={spot.key}
+          fusion={spot.fusion}
+          type={spot.type}
+          color={spot.color}
           file={file}
           rank={rank}
-          size={spots[i]!.size}
-          seat={spots[i]!.seat}
-          position={[file - 4.5 + spots[i]!.x, spots[i]!.foot, rank - 4.5]}
+          size={spot.size}
+          seat={spot.seat}
+          position={[file - 4.5 + spot.x, spot.foot, rank - 4.5]}
           lib={lib}
           targetMap={targetMap}
           onClick={onClick}
           motion={motion}
           motionRate={motionRate}
           accent={accent}
-          canMove={canMove && !ghost}
+          canMove={canMove && !ghost && !held}
           onHoverSquare={onHoverSquare}
           onArmDrag={onArmDrag}
           ghost={ghost}
           followPointer={followPointer}
         />
       ))}
-      {badge.fused && !ghost && (
-        <Label text={badge.title} position={[file - 4.5, 0.2, rank - 4.5 - 0.9]} wide />
+      {lone && !lone.fusion && !lone.asType && lone.pieces.length === 2 && !ghost && (
+        <Label text={stackBadge(lone.pieces).title} position={[file - 4.5, 0.2, rank - 4.5 - 0.9]} wide />
       )}
     </group>
   )
@@ -579,7 +587,7 @@ function PieceMesh({
   const ref = useRef<THREE.Mesh>(null)
   const hot = useRef(false)
   const yaw = color === 'white' ? 0 : Math.PI
-  const frames = fusion ? lib.fusions[fusion][color] : lib.pieces[type][color]
+  const frames = facingFrames(lib, type, color, fusion)
   const dragPlane = useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.2))
   const dragHit = useRef(new THREE.Vector3())
   useLayoutEffect(() => {

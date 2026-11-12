@@ -81,7 +81,7 @@ describe('Myriad Chess engine', () => {
     expect(types).toContain('Bishop')
   })
 
-  it('does not promote a Soldat buried under another piece', () => {
+  it('a Turm leaves a Soldat behind instead of dragging it', () => {
     let s = createEmptyPlayState('5+3')
     s = placeStack(s, 0, 0, 'white', ['König'])
     s = placeStack(s, 9, 9, 'black', ['König'])
@@ -96,6 +96,25 @@ describe('Myriad Chess engine', () => {
     })
     expect(moved.ok).toBe(true)
     expect(moved.state.pendingPromotion).toBeNull()
-    expect(moved.state.board[4]![9]!.map((p) => p.type)).toEqual(['Soldat', 'Turm'])
+    expect(moved.state.board[4]![8]!.map((p) => p.type)).toEqual(['Soldat'])
+    expect(moved.state.board[4]![9]!.map((p) => p.type)).toEqual(['Turm'])
+  })
+
+  it('a Turm on two Soldaten leaves the pair behind', () => {
+    let s = createEmptyPlayState('5+3')
+    s = placeStack(s, 0, 0, 'white', ['König'])
+    s = placeStack(s, 9, 9, 'black', ['König'])
+    s = placeStack(s, 4, 4, 'white', ['Soldat', 'Soldat', 'Turm'])
+    const moved = applyAction(s, {
+      type: 'march',
+      fromFile: 4,
+      fromRank: 4,
+      toFile: 7,
+      toRank: 4,
+      mode: 'unit',
+    })
+    expect(moved.ok).toBe(true)
+    expect(moved.state.board[4]![4]!.map((p) => p.type)).toEqual(['Soldat', 'Soldat'])
+    expect(moved.state.board[7]![4]!.map((p) => p.type)).toEqual(['Turm'])
   })
 })

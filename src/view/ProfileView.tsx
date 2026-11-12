@@ -7,13 +7,13 @@ import type { FusionId } from './sprites'
 const BASE: PieceType[] = ['König', 'Dame', 'Turm', 'Bishop', 'Ritter', 'Drache', 'Soldat']
 
 const FUSIONS: { title: string; fusion?: FusionId; types: [PieceType, PieceType] }[] = [
-  { title: 'Turm + Turm', types: ['Turm', 'Turm'] },
+  { title: 'Doppelturm', fusion: 'double-turm', types: ['Turm', 'Turm'] },
   { title: 'Dame', fusion: 'bishop-tower', types: ['Bishop', 'Turm'] },
   { title: 'Edler Drache', fusion: 'elder-dragon', types: ['Drache', 'Drache'] },
   { title: 'Edler Ritter', fusion: 'noble-knight', types: ['Ritter', 'Ritter'] },
   { title: 'Drachenritter', types: ['Drache', 'Ritter'] },
   { title: 'Soldat + Soldat', fusion: 'viking', types: ['Soldat', 'Soldat'] },
-  { title: 'Pope', types: ['Bishop', 'Bishop'] },
+  { title: 'Pope', fusion: 'pope', types: ['Bishop', 'Bishop'] },
   { title: 'Dame + Dame', types: ['Dame', 'Dame'] },
 ]
 

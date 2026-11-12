@@ -219,6 +219,40 @@ select {
   pointer-events: none;
 }
 
+.check-toast {
+  position: fixed;
+  top: 1.15rem;
+  left: 50%;
+  z-index: 70;
+  transform: translateX(-50%);
+  pointer-events: none;
+  margin: 0;
+  padding: 0.45rem 0.9rem;
+  background: rgba(244, 241, 234, 0.94);
+  color: #161616;
+  border: 3px solid #0e0e0e;
+  font-family: 'Silkscreen', monospace;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  animation: checkFade 2.1s linear forwards;
+}
+
+.check-toast span {
+  display: block;
+}
+
+@keyframes checkFade {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.72;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 .popup-card {
   background: #f4f1ea;
   color: #161616;
@@ -470,13 +504,13 @@ select {
   position: relative;
   display: flex;
   justify-content: center;
+  width: 100%;
 }
 
 .board-stage {
-  width: min(100%, 82vh);
+  width: 100%;
   aspect-ratio: 1;
   height: auto;
-  max-height: 82vh;
   background: #161616;
   border: 4px solid #0e0e0e;
   box-shadow: 8px 8px 0 #000;
