@@ -12,12 +12,12 @@ import { WHITE_SOLDIER_RANKS_1, BLACK_SOLDIER_RANKS_1 } from './coords'
 
 function emptyPools() {
   return {
-    Volk: 0,
-    Jugend: 0,
-    Tower: 0,
-    Schütze: 0,
-    Kavallerie: 0,
-    Infanterie: 0,
+    König: 0,
+    Dame: 0,
+    Turm: 0,
+    Bishop: 0,
+    Ritter: 0,
+    Drache: 0,
   }
 }
 
@@ -50,7 +50,7 @@ export function createMirroredQuickStart(timeControl: TimeControlId = '10+5'): G
 
   // Mains on back ranks — mirrored
   // White rank 1 (0): T S K I V J I K S T  roughly classic-ish stretch
-  const back: PieceType[] = ['Tower', 'Schütze', 'Kavallerie', 'Infanterie', 'Volk', 'Jugend', 'Infanterie', 'Kavallerie', 'Schütze', 'Tower']
+  const back: PieceType[] = ['Turm', 'Bishop', 'Ritter', 'Drache', 'König', 'Dame', 'Drache', 'Ritter', 'Bishop', 'Turm']
   for (let f = 0; f < 10; f++) {
     put(board, f, 0, [back[f]!], 'white', id)
     put(board, f, 9, [back[f]!], 'black', id)
@@ -63,8 +63,8 @@ export function createMirroredQuickStart(timeControl: TimeControlId = '10+5'): G
     phase: 'play',
     turn: 'white',
     reserve: {
-      white: ['Tower', 'Schütze', 'Kavallerie', 'Infanterie'],
-      black: ['Tower', 'Schütze', 'Kavallerie', 'Infanterie'],
+      white: ['Turm', 'Bishop', 'Ritter', 'Drache'],
+      black: ['Turm', 'Bishop', 'Ritter', 'Drache'],
     },
     setup: {
       white: {

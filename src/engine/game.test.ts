@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { applyAction, createInitialState, algebraic } from './index'
+import { applyAction, createInitialState, algebraic, createEmptyPlayState, placeStack } from './index'
 import { soldierBaseRank } from './coords'
 
-describe('Schach 2 engine', () => {
+describe('Myriad Chess engine', () => {
   it('places fixed soldier zigzag for white', () => {
     const s = createInitialState('5+3')
     expect(soldierBaseRank('white', 0)).toBe(1) // A2
@@ -38,7 +38,7 @@ describe('Schach 2 engine', () => {
     const res = applyAction(s, {
       type: 'place',
       color: 'white',
-      piece: 'Volk',
+      piece: 'König',
       file: 0,
       rank: 2,
     })
@@ -49,5 +49,53 @@ describe('Schach 2 engine', () => {
   it('algebraic labels', () => {
     expect(algebraic(0, 0)).toBe('a1')
     expect(algebraic(9, 9)).toBe('j10')
+  })
+
+  it('promotes a Soldat that reaches the back rank', () => {
+    let s = createEmptyPlayState('5+3')
+    s = placeStack(s, 0, 0, 'white', ['König'])
+    s = placeStack(s, 0, 9, 'black', ['König'])
+    s = placeStack(s, 4, 7, 'white', ['Soldat'])
+    const moved = applyAction(s, { type: 'march', fromFile: 4, fromRank: 7, toFile: 4, toRank: 9, mode: 'unit' })
+    expect(moved.ok).toBe(true)
+    expect(moved.state.pendingPromotion?.squares[0]).toMatchObject({ file: 4, rank: 9, isDouble: false })
+    expect(moved.state.turn).toBe('white')
+    const done = applyAction(moved.state, { type: 'promote', choices: ['Turm'] })
+    expect(done.ok).toBe(true)
+    expect(done.state.board[4]![9]![0]!.type).toBe('Turm')
+    expect(done.state.pendingPromotion).toBeNull()
+    expect(done.state.turn).toBe('black')
+  })
+
+  it('promotes a Doppelsoldat into Dame plus a chosen piece', () => {
+    let s = createEmptyPlayState('5+3')
+    s = placeStack(s, 0, 0, 'white', ['König'])
+    s = placeStack(s, 0, 9, 'black', ['König'])
+    s = placeStack(s, 5, 7, 'white', ['Soldat', 'Soldat'])
+    const moved = applyAction(s, { type: 'march', fromFile: 5, fromRank: 7, toFile: 5, toRank: 9, mode: 'unit' })
+    expect(moved.state.pendingPromotion?.squares[0]?.isDouble).toBe(true)
+    const done = applyAction(moved.state, { type: 'promote', choices: ['Bishop'] })
+    expect(done.ok).toBe(true)
+    const types = done.state.board[5]![9]!.map((p) => p.type)
+    expect(types).toContain('Dame')
+    expect(types).toContain('Bishop')
+  })
+
+  it('does not promote a Soldat buried under another piece', () => {
+    let s = createEmptyPlayState('5+3')
+    s = placeStack(s, 0, 0, 'white', ['König'])
+    s = placeStack(s, 9, 9, 'black', ['König'])
+    s = placeStack(s, 4, 8, 'white', ['Soldat', 'Turm'])
+    const moved = applyAction(s, {
+      type: 'march',
+      fromFile: 4,
+      fromRank: 8,
+      toFile: 4,
+      toRank: 9,
+      mode: 'unit',
+    })
+    expect(moved.ok).toBe(true)
+    expect(moved.state.pendingPromotion).toBeNull()
+    expect(moved.state.board[4]![9]!.map((p) => p.type)).toEqual(['Soldat', 'Turm'])
   })
 })

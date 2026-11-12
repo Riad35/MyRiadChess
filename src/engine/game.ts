@@ -1,4 +1,12 @@
-import type { Action, ApplyResult, Color, GameState, PieceType, Stack } from './types'
+import {
+  PIECE_LETTER,
+  type Action,
+  type ApplyResult,
+  type Color,
+  type GameState,
+  type PieceType,
+  type Stack,
+} from './types'
 import {
   algebraic,
   cloneBoard,
@@ -7,6 +15,7 @@ import {
   isMainSetupRank,
   isMidfield,
   makePiece,
+  promotionRank,
   soldierBaseRank,
   sqKey,
   top,
@@ -21,8 +30,8 @@ import {
 import {
   generateMovesFrom,
   isSquareAttacked,
-  isVolkInCheck,
-  wouldLeaveVolkInCheck,
+  isKoenigInCheck,
+  wouldLeaveKoenigInCheck,
 } from './moves'
 
 function fail(state: GameState, reason: string): ApplyResult {
@@ -44,6 +53,7 @@ export function applyAction(state: GameState, action: Action): ApplyResult {
   }
 
   if (action.type === 'tick') {
+    if (state.pendingPromotion) return { ok: true, state }
     if (state.phase !== 'play' || state.result) return { ok: true, state }
     const clocks = { ...state.clocksMs }
     clocks[action.side] = Math.max(0, clocks[action.side]! - 100)
@@ -58,6 +68,10 @@ export function applyAction(state: GameState, action: Action): ApplyResult {
       next = appendLog(next, 'system', `Flag: ${action.side} ran out of time.`)
     }
     return { ok: true, state: next }
+  }
+
+  if (state.pendingPromotion && action.type !== 'promote') {
+    return fail(state, 'Resolve promotion first')
   }
 
   switch (action.type) {
@@ -136,7 +150,7 @@ function confirmDoubles(state: GameState, color: Color, files: number[]): ApplyR
       phase: 'setup-mains',
       turn: 'white',
     }
-    next = appendLog(next, 'system', 'Place main pieces (White). Minimum: V, J, 2× each T/S/K/I. Pass when ready.')
+    next = appendLog(next, 'system', 'Place main pieces (White). Minimum: K, D, 2× each T/B/R/Dr. Pass when ready.')
   }
   return ok(next)
 }
@@ -211,7 +225,7 @@ function passSetup(state: GameState, color: Color): ApplyResult {
   if (!hasMinimumArmy(state, color)) {
     return fail(
       state,
-      'Cannot pass until Volk, Jugend, 15 Soldaten, and 2× each Tower/Schütze/Kavallerie/Infanterie are placed',
+      'Cannot pass until König, Dame, 15 Soldaten, and 2× each Turm/Bishop/Ritter/Drache are placed',
     )
   }
   let next: GameState = {
@@ -279,9 +293,9 @@ function finalizeMove(state: GameState, note: string): ApplyResult {
 
   // check / mate / stash / threefold
   const opp = next.turn
-  const inCheck = isVolkInCheck(next, opp)
+  const inCheck = isKoenigInCheck(next, opp)
   if (inCheck) {
-    next = appendLog(next, 'info', `Check to ${opp} Volk!`)
+    next = appendLog(next, 'info', `Check to ${opp} König!`)
   }
 
   const key = positionKey(next)
@@ -336,7 +350,7 @@ function hasAnyLegalPlayMove(state: GameState, color: Color): boolean {
       const moves = generateMovesFrom(state, f, r)
       for (const m of moves) {
         if (
-          !wouldLeaveVolkInCheck(state, color, (draft) => {
+          !wouldLeaveKoenigInCheck(state, color, (draft) => {
             applyMarchMut(draft, f, r, m.file, m.rank, m.mode ?? 'unit', m.kind)
           })
         ) {
@@ -345,7 +359,7 @@ function hasAnyLegalPlayMove(state: GameState, color: Color): boolean {
       }
       if (stack.length === 3 && state.shotReady.has(sqKey(f, r))) {
         const shots = generateMovesFrom(state, f, r, { asShoot: true })
-        if (shots.some((s) => !wouldLeaveVolkInCheck(state, color, (d) => applyShotMut(d, f, r, s.file, s.rank)))) {
+        if (shots.some((s) => !wouldLeaveKoenigInCheck(state, color, (d) => applyShotMut(d, f, r, s.file, s.rank)))) {
           return true
         }
       }
@@ -370,11 +384,11 @@ function canDrop(
   }
   if (top(stack)!.color !== color) return { ok: false, reason: 'Cannot drop on enemy stack' }
   if (stack.length >= 3) return { ok: false, reason: 'Stack already height 3' }
-  if (stack.some((p) => p.type === 'Volk' || p.type === 'Jugend')) {
-    return { ok: false, reason: 'Cannot drop onto Volk or Jugend' }
+  if (stack.some((p) => p.type === 'König' || p.type === 'Dame')) {
+    return { ok: false, reason: 'Cannot drop onto König or Dame' }
   }
-  if (piece === 'Volk' && stack.some((p) => p.type === 'Soldat')) {
-    return { ok: false, reason: 'Volk cannot stack onto Soldaten' }
+  if (piece === 'König' && stack.some((p) => p.type === 'Soldat')) {
+    return { ok: false, reason: 'König cannot stack onto Soldaten' }
   }
   return { ok: true }
 }
@@ -391,43 +405,42 @@ function march(
   if (top(stack)!.color !== state.turn) return fail(state, 'Not your piece')
 
   const moves = generateMovesFrom(state, fromFile, fromRank, {
-    mode: mode === 'infanterie' || mode === 'kavallerie' ? mode : undefined,
+    mode: mode === 'drache' || mode === 'ritter' ? mode : undefined,
   })
-  const hit = moves.find((m) => m.file === toFile && m.rank === toRank && (!mode || !m.mode || m.mode === mode || mode === 'unit'))
-  // allow matching by coordinates; if mode split requested, prefer split
+  const onSquare = (m: { file: number; rank: number }) => m.file === toFile && m.rank === toRank
   const preferred =
     mode === 'split'
-      ? moves.find((m) => m.file === toFile && m.rank === toRank && m.kind === 'split')
-      : mode === 'unit'
-        ? moves.find((m) => m.file === toFile && m.rank === toRank && m.mode === 'unit')
-        : hit ?? moves.find((m) => m.file === toFile && m.rank === toRank)
+      ? moves.find((m) => onSquare(m) && m.kind === 'split')
+      : mode === 'ritter' || mode === 'drache'
+        ? moves.find((m) => onSquare(m) && m.mode === mode)
+        : moves.find((m) => onSquare(m) && m.kind !== 'split' && m.mode !== 'ritter' && m.mode !== 'drache')
 
   if (!preferred) return fail(state, 'That destination is not legal for this stack')
 
   if (
-    wouldLeaveVolkInCheck(state, state.turn, (draft) => {
+    wouldLeaveKoenigInCheck(state, state.turn, (draft) => {
       applyMarchMut(draft, fromFile, fromRank, toFile, toRank, preferred.mode ?? 'unit', preferred.kind)
     })
   ) {
-    return fail(state, 'Volk would move into check / leave Volk in check')
+    return fail(state, 'König would move into check / leave König in check')
   }
 
   const board = cloneBoard(state.board)
   const draft: GameState = { ...state, board, shotReady: new Set(state.shotReady) }
   applyMarchMut(draft, fromFile, fromRank, toFile, toRank, preferred.mode ?? 'unit', preferred.kind)
 
-  // 3-stack formation: cannot threaten enemy Volk
+  // 3-stack formation: cannot threaten enemy König
   const formed3 = draft.board[toFile]![toRank]?.length === 3
   if (formed3) {
     draft.shotReady.add(sqKey(toFile, toRank))
-    if (isSquareAttacked(draft, findEnemyVolk(draft)!.file, findEnemyVolk(draft)!.rank, state.turn) &&
-        /* only illegal if NEW threat from forming 3er — approximate: if enemy volk in check */ isVolkInCheck(draft, enemy(state.turn))) {
-      // Rule: forming 3-stack must not threaten enemy Volk
+    if (isSquareAttacked(draft, findEnemyKoenig(draft)!.file, findEnemyKoenig(draft)!.rank, state.turn) &&
+        /* only illegal if NEW threat from forming 3er — approximate: if enemy koenig in check */ isKoenigInCheck(draft, enemy(state.turn))) {
+      // Rule: forming 3-stack must not threaten enemy König
       // Check if the attack comes from this square's pattern
       const shots = generateMovesFrom(draft, toFile, toRank)
-      const volk = findEnemyVolk(draft)!
-      if (shots.some((t) => t.file === volk.file && t.rank === volk.rank && (t.kind === 'capture' || t.kind === 'move'))) {
-        return fail(state, 'Cannot form a 3-stack that threatens the enemy Volk')
+      const koenig = findEnemyKoenig(draft)!
+      if (shots.some((t) => t.file === koenig.file && t.rank === koenig.rank && (t.kind === 'capture' || t.kind === 'move'))) {
+        return fail(state, 'Cannot form a 3-stack that threatens the enemy König')
       }
     }
   }
@@ -436,15 +449,49 @@ function march(
   draft.shotReady.delete(sqKey(fromFile, fromRank))
 
   const note = `${state.turn}: ${algebraic(fromFile, fromRank)} → ${algebraic(toFile, toRank)}${preferred.kind === 'split' ? ' (split)' : preferred.kind === 'fuse' ? ' ↑' : preferred.kind === 'capture' ? ' x' : ''}`
+  const promo = promotionAt(draft, state.turn, toFile, toRank)
+  if (promo) {
+    return {
+      ok: true,
+      state: appendLog(
+        {
+          ...draft,
+          pendingPromotion: {
+            color: state.turn,
+            squares: [{ file: toFile, rank: toRank, isDouble: promo.isDouble }],
+          },
+        },
+        'system',
+        `${note}. Choose a promotion.`,
+      ),
+    }
+  }
   return finalizeMove(draft, note)
 }
 
-function findEnemyVolk(state: GameState): { file: number; rank: number } | null {
+const PROMOTABLE: PieceType[] = ['Turm', 'Bishop', 'Ritter', 'Drache']
+
+function promotionAt(
+  state: GameState,
+  color: Color,
+  file: number,
+  rank: number,
+): { isDouble: boolean } | null {
+  if (rank !== promotionRank(color)) return null
+  const stack = state.board[file]?.[rank]
+  if (!stack || stack.length === 0) return null
+  const head = stack[stack.length - 1]!
+  if (head.color !== color || head.type !== 'Soldat') return null
+  const below = stack.length >= 2 ? stack[stack.length - 2]! : null
+  return { isDouble: !!below && below.color === color && below.type === 'Soldat' }
+}
+
+function findEnemyKoenig(state: GameState): { file: number; rank: number } | null {
   const c = enemy(state.turn)
   for (let f = 0; f < 10; f++) {
     for (let r = 0; r < 10; r++) {
       const s = state.board[f]![r]
-      if (s?.some((p) => p.type === 'Volk' && p.color === c)) return { file: f, rank: r }
+      if (s?.some((p) => p.type === 'König' && p.color === c)) return { file: f, rank: r }
     }
   }
   return null
@@ -527,12 +574,12 @@ function shoot(
     return fail(state, 'Illegal shot target (blocked or out of pattern)')
   }
   const target = state.board[toFile]![toRank]
-  if (target?.some((p) => p.type === 'Volk')) return fail(state, 'Cannot shoot the enemy Volk')
+  if (target?.some((p) => p.type === 'König')) return fail(state, 'Cannot shoot the enemy König')
 
   if (
-    wouldLeaveVolkInCheck(state, state.turn, (d) => applyShotMut(d, fromFile, fromRank, toFile, toRank))
+    wouldLeaveKoenigInCheck(state, state.turn, (d) => applyShotMut(d, fromFile, fromRank, toFile, toRank))
   ) {
-    return fail(state, 'Shot would leave Volk in check')
+    return fail(state, 'Shot would leave König in check')
   }
 
   const board = cloneBoard(state.board)
@@ -569,12 +616,12 @@ function dropReserve(
   }
 
   if (nextStack.length === 3) {
-    // cannot threaten enemy volk
-    const volk = findEnemyVolk({ ...draft, turn: color })
-    if (volk) {
+    // cannot threaten enemy koenig
+    const koenig = findEnemyKoenig({ ...draft, turn: color })
+    if (koenig) {
       const attacks = generateMovesFrom(draft, action.file, action.rank)
-      if (attacks.some((t) => t.file === volk.file && t.rank === volk.rank && t.kind === 'capture')) {
-        return fail(state, 'Cannot form a 3-stack that threatens the enemy Volk')
+      if (attacks.some((t) => t.file === koenig.file && t.rank === koenig.rank && t.kind === 'capture')) {
+        return fail(state, 'Cannot form a 3-stack that threatens the enemy König')
       }
     }
     draft.shotReady.add(sqKey(action.file, action.rank))
@@ -592,19 +639,52 @@ function dropReserve(
     }
   }
 
-  if (wouldLeaveVolkInCheck(state, color, () => {})) {
-    /* drop itself rarely checks own volk */
+  if (wouldLeaveKoenigInCheck(state, color, () => {})) {
+    /* drop itself rarely checks own koenig */
   }
-  if (isVolkInCheck({ ...draft, turn: color }, color)) {
-    return fail(state, 'Drop leaves Volk in check')
+  if (isKoenigInCheck({ ...draft, turn: color }, color)) {
+    return fail(state, 'Drop leaves König in check')
   }
 
   return finalizeMove(draft, `${color}: Res-${action.piece} → ${algebraic(action.file, action.rank)}`)
 }
 
-function promote(state: GameState, _choices: PieceType[]): ApplyResult {
-  if (!state.pendingPromotion) return fail(state, 'No pending promotion')
-  return fail(state, 'Use promotion UI choices (pending wiring)')
+function promote(state: GameState, choices: PieceType[]): ApplyResult {
+  const pending = state.pendingPromotion
+  if (!pending) return fail(state, 'No pending promotion')
+  if (choices.length !== pending.squares.length) return fail(state, 'Choose a piece for each promotion')
+  for (const choice of choices) {
+    if (!PROMOTABLE.includes(choice)) {
+      return fail(state, 'Promote only to Turm, Bishop, Ritter, or Drache')
+    }
+  }
+
+  const board = cloneBoard(state.board)
+  pending.squares.forEach((sq, i) => {
+    const stack = board[sq.file]![sq.rank]
+    if (!stack) return
+    const choice = choices[i]!
+    const next = stack.map((p) => ({ ...p }))
+    const topIndex = next.length - 1
+    if (next[topIndex]?.type === 'Soldat') next[topIndex] = { ...next[topIndex], type: choice }
+    if (sq.isDouble && topIndex >= 1 && next[topIndex - 1]?.type === 'Soldat') {
+      next[topIndex - 1] = { ...next[topIndex - 1], type: 'Dame' }
+    }
+    board[sq.file]![sq.rank] = next
+  })
+
+  const draft: GameState = { ...state, board, pendingPromotion: null }
+  if (isKoenigInCheck(draft, pending.color)) return fail(state, 'Promotion leaves König in check')
+
+  const note = pending.squares
+    .map((sq, i) => {
+      const picked = choices[i]!
+      return sq.isDouble
+        ? `${algebraic(sq.file, sq.rank)}=D+${PIECE_LETTER[picked]}`
+        : `${algebraic(sq.file, sq.rank)}=${PIECE_LETTER[picked]}`
+    })
+    .join(' ')
+  return finalizeMove(draft, `${pending.color}: promote ${note}`)
 }
 
 export function legalTargets(
@@ -623,7 +703,7 @@ export function legalTargets(
     if (seen.has(key)) continue
     seen.add(key)
     if (
-      wouldLeaveVolkInCheck(state, state.turn, (d) =>
+      wouldLeaveKoenigInCheck(state, state.turn, (d) =>
         applyMarchMut(d, fromFile, fromRank, m.file, m.rank, m.mode ?? 'unit', m.kind),
       )
     ) {

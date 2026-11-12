@@ -1,41 +1,71 @@
 import type { Color, PieceType, TimeControlId } from '../engine/types'
+import { ACCENT_SWATCHES } from '../view/ColorSwatches'
+
+export type AmbientFx = 'off' | 'lightning' | 'scan' | 'sparks' | 'glitch'
+export type AnimSpeed = 'off' | 'fast' | 'normal'
 
 export interface AppSettings {
   boardLight: string
   boardDark: string
   accent: string
-  pieceWhite: string
-  pieceBlack: string
   showCoords: boolean
   showLegalDots: boolean
   showPhaseBanners: boolean
   soundEnabled: boolean
-  animationSpeed: 'off' | 'fast' | 'normal'
+  musicVolume: number
+  animationSpeed: AnimSpeed
   timeControlDefault: TimeControlId
+  ambientFx: AmbientFx
+  introEnabled: boolean
+  playerName: string
+  skinId: string
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  boardLight: '#d7e0c4',
-  boardDark: '#3f5a38',
-  accent: '#d4b56a',
-  pieceWhite: '#f6f3ea',
-  pieceBlack: '#1c1c1c',
+  boardLight: '#ebe6dc',
+  boardDark: '#7a756e',
+  accent: '#39ff14',
   showCoords: true,
   showLegalDots: true,
   showPhaseBanners: true,
   soundEnabled: true,
+  musicVolume: 0.6,
   animationSpeed: 'normal',
   timeControlDefault: '10+5',
+  ambientFx: 'lightning',
+  introEnabled: true,
+  playerName: 'Player',
+  skinId: 'classic',
 }
 
-const SETTINGS_KEY = 'schach2.settings.v1'
+const SETTINGS_KEY = 'schach2.settings.v3'
+const LEGACY_SETTINGS_KEY = 'schach2.settings.v2'
 const COMPOSITIONS_KEY = 'schach2.compositions.v1'
+
+const PIECE_ALIAS: Record<string, PieceType> = {
+  Volk: 'König',
+  Jugend: 'Dame',
+  Tower: 'Turm',
+  Schütze: 'Bishop',
+  Kavallerie: 'Ritter',
+  Infanterie: 'Drache',
+  Soldat: 'Soldat',
+  König: 'König',
+  Dame: 'Dame',
+  Turm: 'Turm',
+  Bishop: 'Bishop',
+  Ritter: 'Ritter',
+  Drache: 'Drache',
+}
 
 export function loadSettings(): AppSettings {
   try {
-    const raw = localStorage.getItem(SETTINGS_KEY)
+    const raw = localStorage.getItem(SETTINGS_KEY) ?? localStorage.getItem(LEGACY_SETTINGS_KEY)
     if (!raw) return { ...DEFAULT_SETTINGS }
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
+    const parsed = JSON.parse(raw) as Partial<AppSettings>
+    const merged = { ...DEFAULT_SETTINGS, ...parsed }
+    const accent = ACCENT_SWATCHES.find((hex) => hex.toLowerCase() === merged.accent.toLowerCase())
+    return { ...merged, accent: accent ?? DEFAULT_SETTINGS.accent }
   } catch {
     return { ...DEFAULT_SETTINGS }
   }
@@ -57,11 +87,21 @@ export interface SavedComposition {
   createdAt: number
 }
 
+function migrateComposition(raw: SavedComposition): SavedComposition {
+  return {
+    ...raw,
+    placements: raw.placements.map((p) => ({
+      ...p,
+      type: PIECE_ALIAS[p.type] ?? 'Soldat',
+    })),
+  }
+}
+
 export function loadCompositions(): SavedComposition[] {
   try {
     const raw = localStorage.getItem(COMPOSITIONS_KEY)
     if (!raw) return []
-    return JSON.parse(raw) as SavedComposition[]
+    return (JSON.parse(raw) as SavedComposition[]).map(migrateComposition)
   } catch {
     return []
   }

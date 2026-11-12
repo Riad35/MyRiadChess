@@ -1,6 +1,6 @@
-# Schach 2
+# Myriad Chess
 
-Local hot-seat web app for **Schach 2** (v3.1 playtest rules).
+Local hot-seat web app for **Myriad Chess** (v3.1 playtest rules).
 
 ## Run
 

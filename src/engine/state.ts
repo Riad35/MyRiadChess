@@ -23,8 +23,8 @@ export function createInitialState(timeControl: TimeControlId = '10+5'): GameSta
     turn: 'white',
     phase: 'setup-doubles',
     reserve: {
-      white: ['Tower', 'Schütze', 'Kavallerie', 'Infanterie'],
-      black: ['Tower', 'Schütze', 'Kavallerie', 'Infanterie'],
+      white: ['Turm', 'Bishop', 'Ritter', 'Drache'],
+      black: ['Turm', 'Bishop', 'Ritter', 'Drache'],
     },
     setup: {
       white: {
@@ -32,12 +32,12 @@ export function createInitialState(timeControl: TimeControlId = '10+5'): GameSta
         doublesConfirmed: false,
         doubleFiles: [],
         pool: {
-          Volk: 1,
-          Jugend: 1,
-          Tower: 2,
-          Schütze: 2,
-          Kavallerie: 2,
-          Infanterie: 2,
+          König: 1,
+          Dame: 1,
+          Turm: 2,
+          Bishop: 2,
+          Ritter: 2,
+          Drache: 2,
         },
       },
       black: {
@@ -45,12 +45,12 @@ export function createInitialState(timeControl: TimeControlId = '10+5'): GameSta
         doublesConfirmed: false,
         doubleFiles: [],
         pool: {
-          Volk: 1,
-          Jugend: 1,
-          Tower: 2,
-          Schütze: 2,
-          Kavallerie: 2,
-          Infanterie: 2,
+          König: 1,
+          Dame: 1,
+          Turm: 2,
+          Bishop: 2,
+          Ritter: 2,
+          Drache: 2,
         },
       },
     },
@@ -110,9 +110,9 @@ export function countOnBoard(state: GameState, color: Color, type: PieceType): n
 }
 
 export function hasMinimumArmy(state: GameState, color: Color): boolean {
-  if (countOnBoard(state, color, 'Volk') < 1) return false
-  if (countOnBoard(state, color, 'Jugend') < 1) return false
-  for (const t of ['Tower', 'Schütze', 'Kavallerie', 'Infanterie'] as PieceType[]) {
+  if (countOnBoard(state, color, 'König') < 1) return false
+  if (countOnBoard(state, color, 'Dame') < 1) return false
+  for (const t of ['Turm', 'Bishop', 'Ritter', 'Drache'] as PieceType[]) {
     if (countOnBoard(state, color, t) < 2) return false
   }
   // 15 soldiers after doubles confirmed
@@ -124,12 +124,12 @@ export function stackAt(state: GameState, file: number, rank: number): Stack | n
   return state.board[file]?.[rank] ?? null
 }
 
-export function findVolk(state: GameState, color: Color): { file: number; rank: number } | null {
+export function findKoenig(state: GameState, color: Color): { file: number; rank: number } | null {
   for (let f = 0; f < 10; f++) {
     for (let r = 0; r < 10; r++) {
       const stack = state.board[f]![r]
       if (!stack) continue
-      if (stack.some((p) => p.type === 'Volk' && p.color === color)) {
+      if (stack.some((p) => p.type === 'König' && p.color === color)) {
         return { file: f, rank: r }
       }
     }
@@ -154,5 +154,5 @@ export function piecesInStackTypes(stack: Stack): PieceType[] {
 }
 
 export function isRoyalTop(piece: Piece | undefined): boolean {
-  return piece?.type === 'Volk' || piece?.type === 'Jugend'
+  return piece?.type === 'König' || piece?.type === 'Dame'
 }

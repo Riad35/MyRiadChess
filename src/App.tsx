@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   applyAction,
   createInitialState,
@@ -6,13 +6,10 @@ import {
   setupPlaceSquares,
   algebraic,
   top,
-  soldierBaseRank,
-  PIECE_LETTER,
   STANDARD_TYPES,
   hasMinimumArmy,
   generateMovesFrom,
-  isVolkInCheck,
-  stackBadge,
+  isKoenigInCheck,
   createMirroredQuickStart,
   createEmptyPlayState,
   placeStack,
@@ -20,24 +17,84 @@ import {
   clearColor,
   applyCompositionToSetup,
   type GameState,
+  type Stack,
   type PieceType,
   type TimeControlId,
   type Color,
   type Action,
 } from './engine'
+import { setPieceIdCounter } from './engine/coords'
 import {
   loadSettings,
   saveSettings,
   loadCompositions,
   upsertComposition,
   deleteComposition,
-  DEFAULT_SETTINGS,
   type AppSettings,
   type SavedComposition,
 } from './lib/prefs'
 import { RULES_SECTIONS, UNIT_SCENARIOS } from './content/unitScenarios'
+import { playBlip, syncMusic } from './lib/audio'
+import { skinById } from './lib/skins'
+import { liftAccent } from './view/ColorSwatches'
+import { AmbientFx } from './view/AmbientFx'
+import { IntroOverlay } from './view/Intro'
+import { ProfileView } from './view/ProfileView'
+import { SettingsView } from './view/SettingsView'
+import { Board3D } from './view/Board3D'
+import { PieceIcon } from './view/PieceIcon'
+import { fusionIdFor } from './view/sprites'
 
-type Screen = 'menu' | 'settings' | 'testing' | 'compositions' | 'game'
+type Screen = 'menu' | 'settings' | 'profile' | 'testing' | 'compositions' | 'game'
+
+const PLAY_KEY = 'myriad.play.v1'
+const INTRO_KEY = 'myriad.intro.played'
+
+function markIntroPlayed() {
+  try {
+    sessionStorage.setItem(INTRO_KEY, '1')
+  } catch {
+    /* private mode */
+  }
+}
+
+function introStillPending() {
+  if (!loadSettings().introEnabled) return false
+  try {
+    return sessionStorage.getItem(INTRO_KEY) !== '1'
+  } catch {
+    return false
+  }
+}
+
+function readPlaySession(): { screen: Screen; gameMode: 'match' | 'sandbox'; state: GameState } | null {
+  try {
+    const raw = sessionStorage.getItem(PLAY_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw) as {
+      screen?: Screen
+      gameMode?: 'match' | 'sandbox'
+      state?: Omit<GameState, 'shotReady'> & { shotReady?: string[] }
+    }
+    const screens: Screen[] = ['menu', 'settings', 'profile', 'testing', 'compositions', 'game']
+    if (!data.state?.board || data.state.board.length !== 10 || !data.screen || !screens.includes(data.screen)) return null
+    const restored: GameState = {
+      ...data.state,
+      shotReady: new Set(Array.isArray(data.state.shotReady) ? data.state.shotReady : []),
+    }
+    if (typeof restored.nextPieceId === 'number') setPieceIdCounter(restored.nextPieceId)
+    if (data.screen === 'game') markIntroPlayed()
+    return {
+      screen: data.screen,
+      gameMode: data.gameMode === 'sandbox' ? 'sandbox' : 'match',
+      state: restored,
+    }
+  } catch {
+    return null
+  }
+}
+
+const boot = readPlaySession()
 type TestingTab = 'guide-rules' | 'guide-units' | 'testmap'
 type Sel =
   | null
@@ -45,25 +102,65 @@ type Sel =
   | { kind: 'reserve'; piece: PieceType }
 
 const PASS_HELP =
-  'Condition: Volk and Jugend set, and at least 2 of each Tower / Schütze / Kavallerie / Infanterie on the board (plus 15 Soldaten). You may keep up to 4 standard figures in reserve for the Battle Phase.'
+  'Condition: König and Dame set, and at least 2 of each Turm / Bishop / Ritter / Drache on the board (plus 15 Soldaten). You may keep up to 4 standard figures in reserve for the Battle Phase.'
+
+const KNOWN_PIECES = new Set<PieceType>(['König', 'Dame', 'Turm', 'Bishop', 'Ritter', 'Drache', 'Soldat'])
+
+type MoveHit = { file: number; rank: number; kind: string; mode?: string }
+type MoveChoice = { title: string; options: { label: string; run: () => void }[] }
+
+function distinctHits(targets: MoveHit[], file: number, rank: number) {
+  const seen = new Set<string>()
+  const out: MoveHit[] = []
+  for (const t of targets) {
+    if (t.file !== file || t.rank !== rank) continue
+    const key = `${t.kind}:${t.mode ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(t)
+  }
+  return out
+}
+
+function moveLabel(hit: MoveHit) {
+  if (hit.kind === 'split') return 'Split — only the top piece'
+  if (hit.mode === 'ritter') return 'Jump as Ritter'
+  if (hit.mode === 'drache') return 'Jump as Drache'
+  if (hit.kind === 'capture') return 'Capture with the whole stack'
+  if (hit.kind === 'fuse') return 'Stack onto your piece'
+  return 'Move the whole stack'
+}
+
+function marchMode(hit: MoveHit): 'ritter' | 'drache' | 'split' | 'unit' {
+  if (hit.kind === 'split') return 'split'
+  if (hit.mode === 'ritter' || hit.mode === 'drache') return hit.mode
+  return 'unit'
+}
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('menu')
+  const [screen, setScreen] = useState<Screen>(boot?.screen ?? 'menu')
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
   const [compositions, setCompositions] = useState<SavedComposition[]>(() => loadCompositions())
   const [timeControl, setTimeControl] = useState<TimeControlId>(settings.timeControlDefault)
-  const [state, setState] = useState<GameState>(() => createInitialState('10+5'))
+  const [state, setState] = useState<GameState>(() => boot?.state ?? createInitialState('10+5'))
   const [sel, setSel] = useState<Sel>(null)
-  const [placePiece, setPlacePiece] = useState<PieceType>('Volk')
+  const [placePiece, setPlacePiece] = useState<PieceType>('König')
   const [banner, setBanner] = useState<string | null>(null)
   const [bannerKey, setBannerKey] = useState(0)
   const [passHelpOpen, setPassHelpOpen] = useState(false)
   const [testingTab, setTestingTab] = useState<TestingTab>('guide-rules')
-  const [unitFilter, setUnitFilter] = useState('Volk')
-  const [spawnType, setSpawnType] = useState<PieceType>('Kavallerie')
+  const [unitFilter, setUnitFilter] = useState('König')
+  const [spawnType, setSpawnType] = useState<PieceType>('Ritter')
   const [spawnColor, setSpawnColor] = useState<Color>('white')
   const [spawnHeight, setSpawnHeight] = useState(1)
-  const [gameMode, setGameMode] = useState<'match' | 'sandbox'>('match')
+  const [gameMode, setGameMode] = useState<'match' | 'sandbox'>(boot?.gameMode ?? 'match')
+  const [notice, setNotice] = useState<{ id: number; title: string; blocking: boolean } | null>(null)
+  const [moveChoice, setMoveChoice] = useState<MoveChoice | null>(null)
+  const [showIntro, setShowIntro] = useState(() => boot?.screen !== 'game' && introStillPending())
+  const [hoverSq, setHoverSq] = useState<{ file: number; rank: number } | null>(null)
+  const [drag, setDrag] = useState<{ file: number; rank: number } | null>(null)
+  const [burst, setBurst] = useState<{ id: number; kind: 'spark' | 'slash' } | null>(null)
+  const skin = skinById(settings.skinId)
 
   const announce = useCallback(
     (text: string) => {
@@ -84,20 +181,36 @@ export default function App() {
     root.style.setProperty('--light', s.boardLight)
     root.style.setProperty('--dark', s.boardDark)
     root.style.setProperty('--gold', s.accent)
-    root.style.setProperty('--white-piece', s.pieceWhite)
-    root.style.setProperty('--black-piece', s.pieceBlack)
+    root.style.setProperty('--gold-hot', liftAccent(s.accent))
   }, [])
 
   useEffect(() => {
     applyTheme(settings)
   }, [settings, applyTheme])
 
+  useEffect(() => {
+    if (showIntro) markIntroPlayed()
+  }, [showIntro])
+
+  useEffect(() => {
+    try {
+      const payload = {
+        screen,
+        gameMode,
+        state: { ...state, shotReady: [...state.shotReady] },
+      }
+      sessionStorage.setItem(PLAY_KEY, JSON.stringify(payload))
+    } catch {
+      /* quota */
+    }
+  }, [screen, gameMode, state])
+
   const startGame = () => {
     setGameMode('match')
     const s = createInitialState(timeControl)
     setState(s)
     setSel(null)
-    setPlacePiece('Volk')
+    setPlacePiece('König')
     setScreen('game')
     announce('SETTING PHASE')
   }
@@ -139,17 +252,61 @@ export default function App() {
   }, [state.phase, screen, gameMode])
 
   useEffect(() => {
-    if (state.phase !== 'play' || state.result || gameMode === 'sandbox') return
+    if (state.phase !== 'play' || state.result || gameMode === 'sandbox' || state.pendingPromotion) return
     const id = window.setInterval(() => {
       setState((prev) => applyAction(prev, { type: 'tick', nowMs: Date.now(), side: prev.turn }).state)
     }, 100)
     return () => clearInterval(id)
-  }, [state.phase, state.result, state.turn, gameMode])
+  }, [state.phase, state.result, state.turn, gameMode, state.pendingPromotion])
+
+  const lastLog = state.log[state.log.length - 1]
+  useEffect(() => {
+    if (!lastLog || lastLog.level !== 'illegal') return
+    setNotice({ id: lastLog.id, title: lastLog.message.replace(/^Illegal:\s*/, ''), blocking: true })
+  }, [lastLog])
+
+  useEffect(() => {
+    void syncMusic(screen === 'game' && settings.soundEnabled, settings.musicVolume)
+  }, [screen, settings.soundEnabled, settings.musicVolume])
+
+  const heard = useRef<number | null>(null)
+  useEffect(() => {
+    if (!lastLog || lastLog.level !== 'move' || heard.current === lastLog.id) return
+    heard.current = lastLog.id
+    const capture = lastLog.message.includes(' x')
+    const fuse = lastLog.message.includes('↑')
+    if (settings.soundEnabled) {
+      if (capture && skin.sfx.capture) playBlip('capture')
+      else if (fuse && skin.sfx.fuse) playBlip('fuse')
+      else if (skin.sfx.move) playBlip('move')
+    }
+    if (skin.vfx !== 'none' && (capture || fuse)) {
+      setBurst({ id: lastLog.id, kind: skin.vfx === 'slash' ? 'slash' : 'spark' })
+    }
+  }, [lastLog, settings.soundEnabled, skin])
+
+  useEffect(() => {
+    if (screen !== 'game' || state.phase !== 'play' || state.pendingPromotion) return
+    if (!isKoenigInCheck(state, state.turn)) return
+    setNotice({
+      id: state.turn === 'white' ? 900_001 : 900_002,
+      title: `${state.turn === 'white' ? 'White' : 'Black'} König is in check`,
+      blocking: false,
+    })
+  }, [state.turn, state.phase, screen, state.pendingPromotion])
 
   const targets = useMemo(() => {
     if (!sel || sel.kind !== 'board' || state.phase !== 'play') return []
     return legalTargets(state, sel.file, sel.rank)
   }, [sel, state])
+
+  const onHoverSquare = useCallback((square: { file: number; rank: number } | null) => {
+    setHoverSq((prev) => {
+      if (!square) return prev ? null : prev
+      if (prev && prev.file === square.file && prev.rank === square.rank) return prev
+      return square
+    })
+  }, [])
 
   const targetMap = useMemo(() => {
     const m = new Map<string, (typeof targets)[0]>()
@@ -160,6 +317,29 @@ export default function App() {
     return m
   }, [targets])
 
+  const preview = useMemo(() => {
+    if (state.phase !== 'play' || state.result || state.pendingPromotion) return null
+    if (!hoverSq || sel?.kind !== 'board') return null
+    if (hoverSq.file === sel.file && hoverSq.rank === sel.rank) return null
+    if (!targetMap.has(`${hoverSq.file},${hoverSq.rank}`)) return null
+    const stack = state.board[sel.file]?.[sel.rank]
+    if (!stack) return null
+    return { file: hoverSq.file, rank: hoverSq.rank, stack }
+  }, [hoverSq, sel, state, targetMap])
+
+  const movableSquares = useMemo(() => {
+    const set = new Set<string>()
+    if (state.phase !== 'play' || state.result || state.pendingPromotion) return set
+    for (let file = 0; file < 10; file++) {
+      for (let rank = 0; rank < 10; rank++) {
+        const stack = state.board[file]?.[rank]
+        if (!stack || top(stack)?.color !== state.turn) continue
+        if (legalTargets(state, file, rank).length > 0) set.add(`${file},${rank}`)
+      }
+    }
+    return set
+  }, [state])
+
   const setupSquares = useMemo(() => {
     if (state.phase !== 'setup-mains') return new Set<string>()
     return new Set(setupPlaceSquares(state, state.turn, placePiece).map((s) => `${s.file},${s.rank}`))
@@ -167,8 +347,8 @@ export default function App() {
 
   const checkSquare = useMemo(() => {
     if (state.phase !== 'play') return null
-    if (!isVolkInCheck(state, state.turn)) return null
-    return findVolk(state, state.turn)
+    if (!isKoenigInCheck(state, state.turn)) return null
+    return findKoenig(state, state.turn)
   }, [state])
 
   const chooser: Color = !state.setup.white.doublesConfirmed
@@ -197,6 +377,7 @@ export default function App() {
       dispatch({ type: 'place', color: state.turn, piece: placePiece, file, rank })
       return
     }
+    if (state.pendingPromotion) return
     if (state.phase === 'play') {
       if (sel?.kind === 'reserve') {
         dispatch({ type: 'drop', piece: sel.piece, file, rank })
@@ -207,21 +388,36 @@ export default function App() {
           setSel(null)
           return
         }
-        const hit = targetMap.get(`${file},${rank}`)
-        if (hit) {
-          const mode =
-            hit.kind === 'split'
-              ? 'split'
-              : hit.mode === 'kavallerie' || hit.mode === 'infanterie'
-                ? hit.mode
-                : 'unit'
+        const hits = distinctHits(targets, file, rank)
+        if (hits.length > 1) {
+          const from = sel
+          setMoveChoice({
+            title: 'How should this piece move?',
+            options: hits.map((hit) => ({
+              label: moveLabel(hit),
+              run: () => {
+                setMoveChoice(null)
+                dispatch({
+                  type: 'march',
+                  fromFile: from.file,
+                  fromRank: from.rank,
+                  toFile: file,
+                  toRank: rank,
+                  mode: marchMode(hit),
+                })
+              },
+            })),
+          })
+          return
+        }
+        if (hits.length === 1) {
           dispatch({
             type: 'march',
             fromFile: sel.file,
             fromRank: sel.rank,
             toFile: file,
             toRank: rank,
-            mode,
+            mode: marchMode(hits[0]!),
           })
           return
         }
@@ -232,12 +428,27 @@ export default function App() {
     }
   }
 
+  const onDragStart = (file: number, rank: number) => {
+    if (state.phase !== 'play' || state.result || state.pendingPromotion) return
+    setSel({ kind: 'board', file, rank })
+    setDrag({ file, rank })
+  }
+
+  const onDragEnd = (square: { file: number; rank: number } | null) => {
+    const from = drag
+    setDrag(null)
+    if (!from || !square) return
+    if (square.file === from.file && square.rank === from.rank) return
+    if (!targetMap.has(`${square.file},${square.rank}`)) return
+    onSquareClick(square.file, square.rank)
+  }
+
   const importComposition = (c: SavedComposition) => {
     if (c.side !== state.turn && state.phase === 'setup-mains') {
       // still allow load for that side's turn later — force to composition side turn
     }
     setState(applyCompositionToSetup(state, c.side, c.doubleFiles, c.placements))
-    setPlacePiece('Tower')
+    setPlacePiece('Turm')
     announce(`LOADED: ${c.name}`)
   }
 
@@ -269,9 +480,20 @@ export default function App() {
   if (screen === 'menu') {
     return (
       <div className="shell menu-shell">
+        <AmbientFx kind={settings.ambientFx} accent={settings.accent} />
+        {showIntro && (
+          <IntroOverlay
+            accent={settings.accent}
+            sound={settings.soundEnabled}
+            onDone={() => {
+              markIntroPlayed()
+              setShowIntro(false)
+            }}
+          />
+        )}
         <div className="menu-card">
           <p className="menu-kicker">Local · Hot-seat</p>
-          <h1 className="menu-title">Schach 2</h1>
+          <h1 className="menu-title">Myriad Chess</h1>
           <p className="menu-sub">War on ten files. Stacks. Reserve. Strict rules.</p>
           <label className="menu-field">
             Time control
@@ -288,6 +510,9 @@ export default function App() {
           </button>
           <button type="button" className="btn" onClick={() => setScreen('settings')}>
             Settings
+          </button>
+          <button type="button" className="btn" onClick={() => setScreen('profile')}>
+            Profile
           </button>
           <button type="button" className="btn" onClick={() => setScreen('testing')}>
             Testing
@@ -308,6 +533,19 @@ export default function App() {
           setSettings(next)
           saveSettings(next)
           applyTheme(next)
+        }}
+        onBack={() => setScreen('menu')}
+      />
+    )
+  }
+
+  if (screen === 'profile') {
+    return (
+      <ProfileView
+        settings={settings}
+        onChange={(next) => {
+          setSettings(next)
+          saveSettings(next)
         }}
         onBack={() => setScreen('menu')}
       />
@@ -385,6 +623,7 @@ export default function App() {
             <div className="piece-picker">
               {units.map((u) => (
                 <button key={u} type="button" className={unitFilter === u ? 'active' : ''} onClick={() => setUnitFilter(u)}>
+                  {KNOWN_PIECES.has(u as PieceType) && <PieceIcon type={u as PieceType} color="white" />}
                   {u}
                 </button>
               ))}
@@ -426,13 +665,45 @@ export default function App() {
           <span>{banner}</span>
         </div>
       )}
+      {notice && (
+        <NoticePopup
+          key={notice.id}
+          title={notice.title}
+          blocking={notice.blocking}
+          onDone={() => setNotice(null)}
+        />
+      )}
+      {moveChoice && (
+        <div className="popup-layer">
+          <div className="popup-card">
+            <h2>{moveChoice.title}</h2>
+            <div className="choice-list">
+              {moveChoice.options.map((opt) => (
+                <button key={opt.label} type="button" className="btn" onClick={opt.run}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <button type="button" className="btn ghost" onClick={() => setMoveChoice(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {state.pendingPromotion && (
+        <PromotionDialog
+          color={state.pendingPromotion.color}
+          isDouble={state.pendingPromotion.squares.some((sq) => sq.isDouble)}
+          onConfirm={(choices) => dispatch({ type: 'promote', choices })}
+        />
+      )}
 
       <header className="topbar">
         <div>
           <button type="button" className="btn ghost small" onClick={() => setScreen(gameMode === 'sandbox' ? 'testing' : 'menu')}>
             {gameMode === 'sandbox' ? 'Testing' : 'Menu'}
           </button>
-          <h1>Schach 2</h1>
+          <h1>Myriad Chess</h1>
         </div>
         <div className={`turn-pill turn-${activeSide(state, chooser)}`}>
           <span className="turn-dot" />
@@ -489,7 +760,7 @@ export default function App() {
             <div className="panel">
               <h2>Place figure</h2>
               <div className="piece-picker">
-                {(['Volk', 'Jugend', ...STANDARD_TYPES] as PieceType[]).map((p) => {
+                {(['König', 'Dame', ...STANDARD_TYPES] as PieceType[]).map((p) => {
                   const left = remainingToPlace(state, state.turn, p)
                   const mine = state.turn
                   return (
@@ -500,7 +771,8 @@ export default function App() {
                       disabled={left <= 0}
                       onClick={() => setPlacePiece(p)}
                     >
-                      {PIECE_LETTER[p]} <small>×{left}</small>
+                      <PieceIcon type={p} color={state.turn} />
+                      <small>×{left}</small>
                     </button>
                   )
                 })}
@@ -555,9 +827,9 @@ export default function App() {
             <div className="panel">
               <h2>Testmap tools</h2>
               <div className="piece-picker">
-                {(['Volk', 'Jugend', ...STANDARD_TYPES, 'Soldat'] as PieceType[]).map((p) => (
+                {(['König', 'Dame', ...STANDARD_TYPES, 'Soldat'] as PieceType[]).map((p) => (
                   <button key={p} type="button" className={spawnType === p ? 'active' : ''} onClick={() => setSpawnType(p)}>
-                    {PIECE_LETTER[p]}
+                    <PieceIcon type={p} color={spawnColor} />
                   </button>
                 ))}
               </div>
@@ -604,6 +876,10 @@ export default function App() {
             </div>
           )}
 
+          {sel?.kind === 'board' && state.board[sel.file]?.[sel.rank] && (
+            <SelectedStack stack={state.board[sel.file]![sel.rank]!} />
+          )}
+
           <ReservePanel
             state={state}
             selected={sel?.kind === 'reserve' ? sel.piece : null}
@@ -611,8 +887,9 @@ export default function App() {
           />
         </aside>
 
-        <main className="board-wrap">
-          <Board
+        <main className={skin.id === 'signal' ? 'board-wrap signal-board' : 'board-wrap'}>
+          {burst && <div key={burst.id} className={`board-fx fx-${burst.kind}`} />}
+          <Board3D
             state={state}
             selected={sel?.kind === 'board' ? sel : null}
             targetMap={settings.showLegalDots ? targetMap : new Map()}
@@ -621,6 +898,17 @@ export default function App() {
             chooser={chooser}
             checkSquare={checkSquare}
             showCoords={settings.showCoords}
+            light={settings.boardLight}
+            dark={settings.boardDark}
+            accent={settings.accent}
+            movable={movableSquares}
+            motion={settings.animationSpeed === 'off' ? 'none' : skin.moveAnim}
+            motionRate={settings.animationSpeed === 'fast' ? 9 : 4.5}
+            preview={preview}
+            dragging={drag}
+            onHoverSquare={onHoverSquare}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
             onSquareClick={onSquareClick}
           />
         </main>
@@ -640,98 +928,10 @@ export default function App() {
   )
 }
 
-function SettingsView({
-  settings,
-  onChange,
-  onBack,
-}: {
-  settings: AppSettings
-  onChange: (s: AppSettings) => void
-  onBack: () => void
-}) {
-  const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => onChange({ ...settings, [key]: value })
-  return (
-    <div className="shell menu-shell">
-      <div className="menu-card wide">
-        <h1 className="menu-title">Settings</h1>
-        <div className="settings-grid">
-          <label>
-            Board light
-            <input type="color" value={settings.boardLight} onChange={(e) => set('boardLight', e.target.value)} />
-          </label>
-          <label>
-            Board dark
-            <input type="color" value={settings.boardDark} onChange={(e) => set('boardDark', e.target.value)} />
-          </label>
-          <label>
-            Accent
-            <input type="color" value={settings.accent} onChange={(e) => set('accent', e.target.value)} />
-          </label>
-          <label>
-            White pieces
-            <input type="color" value={settings.pieceWhite} onChange={(e) => set('pieceWhite', e.target.value)} />
-          </label>
-          <label>
-            Black pieces
-            <input type="color" value={settings.pieceBlack} onChange={(e) => set('pieceBlack', e.target.value)} />
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={settings.showCoords} onChange={(e) => set('showCoords', e.target.checked)} />
-            Show coordinates
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={settings.showLegalDots} onChange={(e) => set('showLegalDots', e.target.checked)} />
-            Highlight legal moves
-          </label>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={settings.showPhaseBanners}
-              onChange={(e) => set('showPhaseBanners', e.target.checked)}
-            />
-            Phase banners
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={settings.soundEnabled} onChange={(e) => set('soundEnabled', e.target.checked)} />
-            Sound (hooks ready)
-          </label>
-          <label>
-            Animations
-            <select
-              value={settings.animationSpeed}
-              onChange={(e) => set('animationSpeed', e.target.value as AppSettings['animationSpeed'])}
-            >
-              <option value="normal">Normal</option>
-              <option value="fast">Fast</option>
-              <option value="off">Off</option>
-            </select>
-          </label>
-          <label>
-            Default clock
-            <select
-              value={settings.timeControlDefault}
-              onChange={(e) => set('timeControlDefault', e.target.value as TimeControlId)}
-            >
-              <option value="5+3">5+3</option>
-              <option value="10+5">10+5</option>
-            </select>
-          </label>
-        </div>
-        <button type="button" className="btn" onClick={() => onChange({ ...DEFAULT_SETTINGS })}>
-          Reset defaults
-        </button>
-        <button type="button" className="btn primary" onClick={onBack}>
-          Back to menu
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function findVolk(state: GameState, color: Color) {
+function findKoenig(state: GameState, color: Color) {
   for (let f = 0; f < 10; f++) {
     for (let r = 0; r < 10; r++) {
-      if (state.board[f]![r]?.some((p) => p.type === 'Volk' && p.color === color)) return { file: f, rank: r }
+      if (state.board[f]![r]?.some((p) => p.type === 'König' && p.color === color)) return { file: f, rank: r }
     }
   }
   return null
@@ -745,7 +945,7 @@ function activeSide(state: GameState, chooser: Color): Color {
 function remainingToPlace(state: GameState, color: Color, piece: PieceType): number {
   const pool = state.setup[color].pool[piece] ?? 0
   const res = state.reserve[color].filter((p) => p === piece).length
-  if (piece === 'Volk' || piece === 'Jugend') return pool
+  if (piece === 'König' || piece === 'Dame') return pool
   return pool + res
 }
 
@@ -762,13 +962,13 @@ function guidanceText(state: GameState, chooser: Color, placePiece: PieceType, m
     const left = remainingToPlace(state, state.turn, placePiece)
     return {
       title: `${label(state.turn)} places`,
-      detail: `Place ${placePiece} (${left} left). Gold squares are legal. Pass when ready.`,
+      detail: `Place ${placePiece} (${left} left). Marked squares are legal. Pass when ready.`,
     }
   }
-  const check = isVolkInCheck(state, state.turn) ? ' — Volk in check!' : ''
+  const check = isKoenigInCheck(state, state.turn) ? ' — König in check!' : ''
   return {
     title: `${label(state.turn)} to move${check}`,
-    detail: 'Click your stack, then a highlighted square. Captures glow red.',
+    detail: 'Click your stack, then a highlighted square. Darker squares are captures.',
   }
 }
 
@@ -798,7 +998,7 @@ function ClockPanel({ state }: { state: GameState }) {
 }
 
 function ArmyPanel({ state, color, active }: { state: GameState; color: Color; active: boolean }) {
-  const items: PieceType[] = ['Volk', 'Jugend', ...STANDARD_TYPES]
+  const items: PieceType[] = ['König', 'Dame', ...STANDARD_TYPES]
   return (
     <div className={`panel army ${active ? 'army-active' : ''}`}>
       <h2>{label(color)} army</h2>
@@ -809,8 +1009,9 @@ function ArmyPanel({ state, color, active }: { state: GameState; color: Color; a
             const need = (state.setup[color].pool[p] ?? 0) > 0
             return (
               <li key={p} className={need ? 'must' : ''}>
-                <span>
-                  {PIECE_LETTER[p]} {p}
+                <span className="army-name">
+                  <PieceIcon type={p} color={color} />
+                  {p}
                 </span>
                 <span>{left} left</span>
               </li>
@@ -820,6 +1021,23 @@ function ArmyPanel({ state, color, active }: { state: GameState; color: Color; a
       ) : (
         <p className="hint">Reserve below · stacks on board.</p>
       )}
+    </div>
+  )
+}
+
+function SelectedStack({ stack }: { stack: Stack }) {
+  const fusion = fusionIdFor(stack)
+  const head = stack[stack.length - 1]!
+  return (
+    <div className="panel">
+      <h2>On this square</h2>
+      <div className="piece-picker">
+        {fusion ? (
+          <PieceIcon type={head.type} fusion={fusion} color={head.color} />
+        ) : (
+          stack.map((piece) => <PieceIcon key={piece.id} type={piece.type} color={piece.color} />)
+        )}
+      </div>
     </div>
   )
 }
@@ -849,7 +1067,7 @@ function ReservePanel({
                 disabled={state.phase !== 'play' || state.turn !== c}
                 onClick={() => onPick(p)}
               >
-                {PIECE_LETTER[p]}
+                <PieceIcon type={p} color={c} />
               </button>
             ))}
           </div>
@@ -888,74 +1106,62 @@ function ShootList({
   )
 }
 
-function Board({
-  state,
-  selected,
-  targetMap,
-  setupSquares,
-  doubleFiles,
-  chooser,
-  checkSquare,
-  showCoords,
-  onSquareClick,
+function NoticePopup({
+  title,
+  blocking,
+  onDone,
 }: {
-  state: GameState
-  selected: { file: number; rank: number } | null
-  targetMap: Map<string, { file: number; rank: number; kind: string; mode?: string }>
-  setupSquares: Set<string>
-  doubleFiles: number[]
-  chooser: Color
-  checkSquare: { file: number; rank: number } | null
-  showCoords: boolean
-  onSquareClick: (file: number, rank: number) => void
+  title: string
+  blocking: boolean
+  onDone: () => void
 }) {
-  const ranks = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
-  const files = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  const done = useRef(onDone)
+  done.current = onDone
+  useEffect(() => {
+    const id = window.setTimeout(() => done.current(), 1680)
+    return () => window.clearTimeout(id)
+  }, [title])
   return (
-    <div className="board" role="grid" aria-label="Schach 2 board">
-      {ranks.map((rank) =>
-        files.map((file) => {
-          const stack = state.board[file]![rank]
-          const dark = (file + rank) % 2 === 1
-          const key = `${file},${rank}`
-          const t = targetMap.get(key)
-          const badge = stack ? stackBadge(stack) : null
-          return (
-            <button
-              key={key}
-              type="button"
-              className={[
-                'sq',
-                dark ? 'dark' : 'light',
-                selected?.file === file && selected?.rank === rank ? 'selected' : '',
-                t ? `target target-${t.kind}` : '',
-                setupSquares.has(key) ? 'placeable' : '',
-                state.phase === 'setup-doubles' &&
-                rank === soldierBaseRank(chooser, file) &&
-                doubleFiles.includes(file)
-                  ? 'double-mark'
-                  : '',
-                checkSquare?.file === file && checkSquare?.rank === rank ? 'in-check' : '',
-              ].join(' ')}
-              onClick={() => onSquareClick(file, rank)}
-              title={badge?.title}
-            >
-              {showCoords && (
-                <span className="coord">
-                  {file === 0 ? rank + 1 : ''}
-                  {rank === 0 ? 'abcdefghij'[file] : ''}
-                </span>
-              )}
-              {stack && badge && (
-                <span className={`stack color-${top(stack)!.color} ${badge.fused ? 'fused' : ''}`}>
-                  <span className="badge">{badge.code}</span>
-                  {stack.length > 1 && !badge.fused && <span className="height">×{stack.length}</span>}
-                </span>
-              )}
+    <div
+      className={blocking ? 'popup-layer popup-flash' : 'popup-layer popup-check'}
+      onClick={blocking ? onDone : undefined}
+      role="status"
+    >
+      <div className="popup-card">
+        <h2>{title}</h2>
+      </div>
+    </div>
+  )
+}
+
+function PromotionDialog({
+  color,
+  isDouble,
+  onConfirm,
+}: {
+  color: Color
+  isDouble: boolean
+  onConfirm: (choices: PieceType[]) => void
+}) {
+  const options: PieceType[] = ['Turm', 'Bishop', 'Ritter', 'Drache']
+  return (
+    <div className="popup-layer">
+      <div className="popup-card">
+        <h2>{isDouble ? 'Doppel promotion' : 'Promote the Soldat'}</h2>
+        <p>
+          {isDouble
+            ? 'One Soldat becomes Dame. Choose what the other becomes.'
+            : 'This Soldat reached the back rank. Choose its new form.'}
+        </p>
+        <div className="piece-picker promo-picker">
+          {options.map((p) => (
+            <button key={p} type="button" onClick={() => onConfirm([p])}>
+              <PieceIcon type={p} color={color} />
+              <span>{p}</span>
             </button>
-          )
-        }),
-      )}
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

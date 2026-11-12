@@ -1,31 +1,31 @@
-/** Schach 2 — shared engine types (renderer-agnostic). */
+/** Myriad Chess — shared engine types (renderer-agnostic). */
 
 export type Color = 'white' | 'black'
 
 export type PieceType =
-  | 'Volk'
-  | 'Jugend'
-  | 'Tower'
-  | 'Schütze'
-  | 'Kavallerie'
-  | 'Infanterie'
+  | 'König'
+  | 'Dame'
+  | 'Turm'
+  | 'Bishop'
+  | 'Ritter'
+  | 'Drache'
   | 'Soldat'
 
 export const PIECE_LETTER: Record<PieceType, string> = {
-  Volk: 'V',
-  Jugend: 'J',
-  Tower: 'T',
-  Schütze: 'S',
-  Kavallerie: 'K',
-  Infanterie: 'I',
-  Soldat: 'P',
+  König: 'K',
+  Dame: 'D',
+  Turm: 'T',
+  Bishop: 'B',
+  Ritter: 'R',
+  Drache: 'Dr',
+  Soldat: 'S',
 }
 
 export const STANDARD_TYPES: PieceType[] = [
-  'Tower',
-  'Schütze',
-  'Kavallerie',
-  'Infanterie',
+  'Turm',
+  'Bishop',
+  'Ritter',
+  'Drache',
 ]
 
 export interface Piece {
@@ -104,8 +104,8 @@ export type Action =
       fromRank: number
       toFile: number
       toRank: number
-      /** For Kavallerie+Infanterie choice, or multi-step paths. */
-      mode?: 'kavallerie' | 'infanterie' | 'split' | 'unit'
+      /** For Ritter+Drache choice, or multi-step paths. */
+      mode?: 'ritter' | 'drache' | 'split' | 'unit'
       path?: { file: number; rank: number }[]
     }
   | {
