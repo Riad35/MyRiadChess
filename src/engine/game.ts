@@ -12,15 +12,15 @@ import {
   cloneBoard,
   enemy,
   inBounds,
+  isBehindOwnSoldier,
   isMainSetupRank,
   isMidfield,
+  isSoldierSetupRank,
   makePiece,
   promotionRank,
-  soldierBaseRank,
   sqKey,
   top,
 } from './coords'
-// isMainSetupRank used by setupPlaceSquares
 import {
   appendLog,
   applyDoublesToBoard,
@@ -57,7 +57,8 @@ export function applyAction(state: GameState, action: Action): ApplyResult {
     if (state.pendingPromotion) return { ok: true, state }
     if (state.phase !== 'play' || state.result) return { ok: true, state }
     const clocks = { ...state.clocksMs }
-    clocks[action.side] = Math.max(0, clocks[action.side]! - 100)
+    const elapsed = Math.max(0, action.elapsedMs ?? 100)
+    clocks[action.side] = Math.max(0, clocks[action.side]! - elapsed)
     let next = { ...state, clocksMs: clocks }
     if (clocks[action.side] <= 0) {
       next = {
@@ -76,6 +77,10 @@ export function applyAction(state: GameState, action: Action): ApplyResult {
   }
 
   switch (action.type) {
+    case 'place-soldier':
+      return placeSoldier(state, action.color, action.file, action.rank)
+    case 'confirm-soldiers':
+      return confirmSoldiers(state, action.color)
     case 'toggle-double-file':
       return toggleDouble(state, action.color, action.file)
     case 'confirm-doubles':
@@ -95,6 +100,103 @@ export function applyAction(state: GameState, action: Action): ApplyResult {
     default:
       return fail(state, 'Unknown action')
   }
+}
+
+function soldierActor(state: GameState): Color {
+  return state.setup.white.soldiersConfirmed ? 'black' : 'white'
+}
+
+function placeSoldier(state: GameState, color: Color, file: number, rank: number): ApplyResult {
+  if (state.phase !== 'setup-soldiers') return fail(state, 'Not in soldier setup phase')
+  const actor = soldierActor(state)
+  if (color !== actor) return fail(state, `Waiting for ${actor} to place Soldaten`)
+  if (!inBounds(file, rank)) return fail(state, 'Off the board')
+  if (!isSoldierSetupRank(color, rank)) {
+    return fail(state, 'Soldaten only on ranks 2–3 (White) or 8–9 (Black), never the back rank')
+  }
+
+  const board = cloneBoard(state.board)
+  const ranks = [...state.setup[color].soldierRanks]
+  const existing = ranks[file] ?? -1
+
+  if (existing === rank) {
+    board[file]![rank] = null
+    ranks[file] = -1
+    const placed = ranks.filter((r) => r >= 0).length
+    return ok(
+      {
+        ...state,
+        board,
+        setup: { ...state.setup, [color]: { ...state.setup[color], soldierRanks: ranks } },
+      },
+      `${color} picked up Soldat on ${algebraic(file, rank)} (${placed}/10)`,
+    )
+  }
+
+  let nextId = state.nextPieceId
+  let stack: Stack
+  if (existing >= 0) {
+    stack = board[file]![existing] ?? [makePiece('Soldat', color, nextId)]
+    if (!board[file]![existing]) nextId += 1
+    board[file]![existing] = null
+  } else {
+    stack = [makePiece('Soldat', color, nextId)]
+    nextId += 1
+  }
+  if (board[file]![rank]) return fail(state, 'Square occupied')
+  board[file]![rank] = stack
+  ranks[file] = rank
+  const placed = ranks.filter((r) => r >= 0).length
+  return ok(
+    {
+      ...state,
+      board,
+      nextPieceId: nextId,
+      setup: { ...state.setup, [color]: { ...state.setup[color], soldierRanks: ranks } },
+    },
+    `${color} Soldat → ${algebraic(file, rank)} (${placed}/10)`,
+  )
+}
+
+function confirmSoldiers(state: GameState, color: Color): ApplyResult {
+  if (state.phase !== 'setup-soldiers') return fail(state, 'Not in soldier setup phase')
+  const actor = soldierActor(state)
+  if (color !== actor) return fail(state, `Waiting for ${actor} to place Soldaten`)
+  const ranks = state.setup[color].soldierRanks
+  if (ranks.length !== 10 || ranks.some((r) => r < 0)) {
+    return fail(state, 'Place exactly one Soldat on each file')
+  }
+  for (let file = 0; file < 10; file++) {
+    const rank = ranks[file]!
+    if (!isSoldierSetupRank(color, rank)) return fail(state, 'Soldat on an illegal rank')
+    const cell = state.board[file]![rank]
+    if (!cell || cell.length !== 1 || cell[0]!.type !== 'Soldat' || cell[0]!.color !== color) {
+      return fail(state, 'Each file needs exactly one Soldat')
+    }
+    for (let r = 0; r < 10; r++) {
+      if (r === rank) continue
+      const other = state.board[file]![r]
+      if (other?.some((p) => p.color === color && p.type === 'Soldat')) {
+        return fail(state, 'Only one Soldat per file')
+      }
+    }
+  }
+
+  let next: GameState = {
+    ...state,
+    setup: {
+      ...state.setup,
+      [color]: { ...state.setup[color], soldiersConfirmed: true },
+    },
+  }
+  next = appendLog(next, 'system', `${color} confirmed Soldaten.`)
+  if (next.setup.white.soldiersConfirmed && next.setup.black.soldiersConfirmed) {
+    next = { ...next, phase: 'setup-doubles', turn: 'white' }
+    next = appendLog(next, 'system', 'Choose 5 double-Soldat files (White first).')
+  } else {
+    next = { ...next, turn: 'black' }
+  }
+  return ok(next)
 }
 
 function toggleDouble(state: GameState, color: Color, file: number): ApplyResult {
@@ -124,7 +226,7 @@ function toggleDouble(state: GameState, color: Color, file: number): ApplyResult
     state: appendLog(
       { ...state, setup },
       'info',
-      `${color} double-file ${algebraic(file, soldierBaseRank(color, file))} → ${cur.length}/5`,
+      `${color} double-file ${algebraic(file, state.setup[color].soldierRanks[file] ?? 0)} → ${cur.length}/5`,
     ),
   }
 }
@@ -170,6 +272,10 @@ function placeMain(
   if (!inBounds(file, rank)) return fail(state, 'Off the board')
   if (!isMainSetupRank(color, rank)) {
     return fail(state, 'Main pieces only on your ranks 1–2 (White) or 10–9 (Black)')
+  }
+  const soldierRank = state.setup[color].soldierRanks[file] ?? -1
+  if (!isBehindOwnSoldier(color, rank, soldierRank)) {
+    return fail(state, 'Main pieces must stand behind the Soldat on that file')
   }
   if (state.board[file]![rank]) return fail(state, 'Square occupied')
 
@@ -351,16 +457,34 @@ function hasAnyLegalPlayMove(state: GameState, color: Color): boolean {
       const moves = generateMovesFrom(state, f, r)
       for (const m of moves) {
         if (
-          !wouldLeaveKoenigInCheck(state, color, (draft) => {
-            applyMarchMut(draft, f, r, m.file, m.rank, m.mode ?? 'unit', m.kind)
-          })
+          !wouldLeaveKoenigInCheck(
+            state,
+            color,
+            (draft) => {
+              applyMarchMut(draft, f, r, m.file, m.rank, m.mode ?? 'unit', m.kind)
+            },
+            [
+              { file: f, rank: r },
+              { file: m.file, rank: m.rank },
+            ],
+          )
         ) {
           return true
         }
       }
       if (stack.length === 3 && state.shotReady.has(sqKey(f, r))) {
         const shots = generateMovesFrom(state, f, r, { asShoot: true })
-        if (shots.some((s) => !wouldLeaveKoenigInCheck(state, color, (d) => applyShotMut(d, f, r, s.file, s.rank)))) {
+        if (
+          shots.some(
+            (s) =>
+              !wouldLeaveKoenigInCheck(
+                state,
+                color,
+                (d) => applyShotMut(d, f, r, s.file, s.rank),
+                [{ file: s.file, rank: s.rank }],
+              ),
+          )
+        ) {
           return true
         }
       }
@@ -419,9 +543,17 @@ function march(
   if (!preferred) return fail(state, 'That destination is not legal for this stack')
 
   if (
-    wouldLeaveKoenigInCheck(state, state.turn, (draft) => {
-      applyMarchMut(draft, fromFile, fromRank, toFile, toRank, preferred.mode ?? 'unit', preferred.kind)
-    })
+    wouldLeaveKoenigInCheck(
+      state,
+      state.turn,
+      (draft) => {
+        applyMarchMut(draft, fromFile, fromRank, toFile, toRank, preferred.mode ?? 'unit', preferred.kind)
+      },
+      [
+        { file: fromFile, rank: fromRank },
+        { file: toFile, rank: toRank },
+      ],
+    )
   ) {
     return fail(state, 'König would move into check / leave König in check')
   }
@@ -578,7 +710,12 @@ function shoot(
   if (target?.some((p) => p.type === 'König')) return fail(state, 'Cannot shoot the enemy König')
 
   if (
-    wouldLeaveKoenigInCheck(state, state.turn, (d) => applyShotMut(d, fromFile, fromRank, toFile, toRank))
+    wouldLeaveKoenigInCheck(
+      state,
+      state.turn,
+      (d) => applyShotMut(d, fromFile, fromRank, toFile, toRank),
+      [{ file: toFile, rank: toRank }],
+    )
   ) {
     return fail(state, 'Shot would leave König in check')
   }
@@ -640,9 +777,6 @@ function dropReserve(
     }
   }
 
-  if (wouldLeaveKoenigInCheck(state, color, () => {})) {
-    /* drop itself rarely checks own koenig */
-  }
   if (isKoenigInCheck({ ...draft, turn: color }, color)) {
     return fail(state, 'Drop leaves König in check')
   }
@@ -688,29 +822,94 @@ function promote(state: GameState, choices: PieceType[]): ApplyResult {
   return finalizeMove(draft, `${pending.color}: promote ${note}`)
 }
 
-export function legalTargets(
-  state: GameState,
-  fromFile: number,
-  fromRank: number,
-): { file: number; rank: number; kind: string; mode?: string }[] {
-  if (state.phase !== 'play') return []
+type LegalMove = { file: number; rank: number; kind: string; mode?: string }
+
+type LegalCache = {
+  turn: GameState['turn']
+  reserve: GameState['reserve']
+  shotReady: GameState['shotReady']
+  phase: GameState['phase']
+  squares: Map<string, LegalMove[]>
+}
+
+const legalCache = new WeakMap<GameState['board'], LegalCache>()
+
+function legalTargetsOnSquare(state: GameState, fromFile: number, fromRank: number): LegalMove[] {
   const stack = state.board[fromFile]?.[fromRank]
   if (!stack || top(stack)?.color !== state.turn) return []
   const raw = generateMovesFrom(state, fromFile, fromRank)
   const seen = new Set<string>()
-  const out: { file: number; rank: number; kind: string; mode?: string }[] = []
+  const out: LegalMove[] = []
   for (const m of raw) {
     const key = `${m.file},${m.rank},${m.kind},${m.mode ?? ''}`
     if (seen.has(key)) continue
     seen.add(key)
     if (
-      wouldLeaveKoenigInCheck(state, state.turn, (d) =>
-        applyMarchMut(d, fromFile, fromRank, m.file, m.rank, m.mode ?? 'unit', m.kind),
+      wouldLeaveKoenigInCheck(
+        state,
+        state.turn,
+        (d) => applyMarchMut(d, fromFile, fromRank, m.file, m.rank, m.mode ?? 'unit', m.kind),
+        [
+          { file: fromFile, rank: fromRank },
+          { file: m.file, rank: m.rank },
+        ],
       )
     ) {
       continue
     }
     out.push({ file: m.file, rank: m.rank, kind: m.kind, mode: m.mode })
+  }
+  return out
+}
+
+function legalMap(state: GameState): Map<string, LegalMove[]> {
+  const hit = legalCache.get(state.board)
+  if (
+    hit &&
+    hit.turn === state.turn &&
+    hit.reserve === state.reserve &&
+    hit.shotReady === state.shotReady &&
+    hit.phase === state.phase
+  ) {
+    return hit.squares
+  }
+  const squares = new Map<string, LegalMove[]>()
+  if (state.phase === 'play') {
+    for (let file = 0; file < 10; file++) {
+      for (let rank = 0; rank < 10; rank++) {
+        const stack = state.board[file]?.[rank]
+        if (!stack || top(stack)?.color !== state.turn) continue
+        const moves = legalTargetsOnSquare(state, file, rank)
+        if (moves.length > 0) squares.set(`${file},${rank}`, moves)
+      }
+    }
+  }
+  legalCache.set(state.board, {
+    turn: state.turn,
+    reserve: state.reserve,
+    shotReady: state.shotReady,
+    phase: state.phase,
+    squares,
+  })
+  return squares
+}
+
+export function legalTargets(state: GameState, fromFile: number, fromRank: number): LegalMove[] {
+  if (state.phase !== 'play') return []
+  return legalMap(state).get(`${fromFile},${fromRank}`) ?? []
+}
+
+/** Squares White or Black may click while placing the ten Soldaten. */
+export function soldierSetupSquares(state: GameState, color: Color): { file: number; rank: number }[] {
+  if (state.phase !== 'setup-soldiers') return []
+  if (soldierActor(state) !== color) return []
+  const out: { file: number; rank: number }[] = []
+  for (let file = 0; file < 10; file++) {
+    const current = state.setup[color].soldierRanks[file] ?? -1
+    for (let rank = 0; rank < 10; rank++) {
+      if (!isSoldierSetupRank(color, rank)) continue
+      if (current === rank || !state.board[file]![rank]) out.push({ file, rank })
+    }
   }
   return out
 }
@@ -722,14 +921,15 @@ export function setupPlaceSquares(
   piece: PieceType,
 ): { file: number; rank: number }[] {
   if (state.phase !== 'setup-mains') return []
+  const poolLeft = state.setup[color].pool[piece] ?? 0
+  const inRes = state.reserve[color].filter((p) => p === piece).length
+  if (poolLeft <= 0 && inRes <= 0) return []
   const out: { file: number; rank: number }[] = []
   for (let f = 0; f < 10; f++) {
     for (let r = 0; r < 10; r++) {
-      if (!isMainSetupRank(color, r)) continue
+      const soldierRank = state.setup[color].soldierRanks[f] ?? -1
+      if (!isBehindOwnSoldier(color, r, soldierRank)) continue
       if (state.board[f]![r]) continue
-      const poolLeft = state.setup[color].pool[piece] ?? 0
-      const inRes = state.reserve[color].filter((p) => p === piece).length
-      if (poolLeft <= 0 && inRes <= 0) continue
       out.push({ file: f, rank: r })
     }
   }

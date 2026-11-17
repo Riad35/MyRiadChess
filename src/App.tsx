@@ -2,15 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   applyAction,
   createInitialState,
+  createZigzagSetup,
+  normalizeGameState,
   carriedStack,
   legalTargets,
   setupPlaceSquares,
+  soldierSetupSquares,
   algebraic,
   top,
   STANDARD_TYPES,
   hasMinimumArmy,
   generateMovesFrom,
   isKoenigInCheck,
+  checkingThreats,
   createMirroredQuickStart,
   createEmptyPlayState,
   placeStack,
@@ -34,22 +38,25 @@ import {
   type AppSettings,
   type SavedComposition,
 } from './lib/prefs'
-import { RULES_SECTIONS, UNIT_SCENARIOS } from './content/unitScenarios'
+import { RULES_SECTIONS, UNIT_ORDER, UNIT_SCENARIOS } from './content/unitScenarios'
 import { playBlip, syncMusic } from './lib/audio'
 import { skinById } from './lib/skins'
 import { liftAccent } from './view/ColorSwatches'
 import { AmbientFx } from './view/AmbientFx'
+import { MenuBackdrop } from './view/MenuBackdrop'
 import { IntroOverlay } from './view/Intro'
 import { ProfileView } from './view/ProfileView'
 import { SettingsView } from './view/SettingsView'
 import { Board3D } from './view/Board3D'
-import { PieceIcon } from './view/PieceIcon'
-import { fusionIdFor } from './view/sprites'
+import { PieceIcon, SkinScope } from './view/PieceIcon'
+import { fusionIdFor, type FusionId } from './view/sprites'
 
 type Screen = 'menu' | 'settings' | 'profile' | 'testing' | 'compositions' | 'game'
 
 const PLAY_KEY = 'myriad.play.v1'
 const INTRO_KEY = 'myriad.intro.played'
+const EMPTY_TARGET_MAP = new Map<string, { file: number; rank: number; kind: string; mode?: string }>()
+const NO_DOUBLE_FILES: number[] = []
 
 function markIntroPlayed() {
   try {
@@ -79,10 +86,10 @@ function readPlaySession(): { screen: Screen; gameMode: 'match' | 'sandbox'; sta
     }
     const screens: Screen[] = ['menu', 'settings', 'profile', 'testing', 'compositions', 'game']
     if (!data.state?.board || data.state.board.length !== 10 || !data.screen || !screens.includes(data.screen)) return null
-    const restored: GameState = {
+    const restored = normalizeGameState({
       ...data.state,
       shotReady: new Set(Array.isArray(data.state.shotReady) ? data.state.shotReady : []),
-    }
+    })
     if (typeof restored.nextPieceId === 'number') setPieceIdCounter(restored.nextPieceId)
     if (data.screen === 'game') markIntroPlayed()
     return {
@@ -105,7 +112,21 @@ type Sel =
 const PASS_HELP =
   'Condition: König and Dame set, and at least 2 of each Turm / Bishop / Ritter / Drache on the board (plus 15 Soldaten). You may keep up to 4 standard figures in reserve for the Battle Phase.'
 
-const KNOWN_PIECES = new Set<PieceType>(['König', 'Dame', 'Turm', 'Bishop', 'Ritter', 'Drache', 'Soldat'])
+const UNIT_ICON: Record<string, { type: PieceType; fusion?: FusionId }> = {
+  König: { type: 'König' },
+  Dame: { type: 'Dame' },
+  Turm: { type: 'Turm' },
+  Bishop: { type: 'Bishop' },
+  Ritter: { type: 'Ritter' },
+  Drache: { type: 'Drache' },
+  Soldat: { type: 'Soldat' },
+  'Edler Ritter': { type: 'Ritter', fusion: 'edler-ritter' },
+  'Edler Drache': { type: 'Drache', fusion: 'edler-drache' },
+  Doppelbishop: { type: 'Bishop', fusion: 'doppelbishop' },
+  Doppelturm: { type: 'Turm', fusion: 'doppelturm' },
+  Drachenritter: { type: 'Drache', fusion: 'drachenritter' },
+  Doppelsoldat: { type: 'Soldat', fusion: 'doppelsoldat' },
+}
 
 type MoveHit = { file: number; rank: number; kind: string; mode?: string }
 type MoveChoice = { title: string; options: { label: string; run: () => void }[] }
@@ -160,7 +181,7 @@ export default function App() {
   const [showIntro, setShowIntro] = useState(() => boot?.screen !== 'game' && introStillPending())
   const [hoverSq, setHoverSq] = useState<{ file: number; rank: number } | null>(null)
   const [drag, setDrag] = useState<{ file: number; rank: number } | null>(null)
-  const [burst, setBurst] = useState<{ id: number; kind: 'spark' | 'slash' } | null>(null)
+  const [burst, setBurst] = useState<{ id: number } | null>(null)
   const skin = skinById(settings.skinId)
 
   const announce = useCallback(
@@ -193,7 +214,57 @@ export default function App() {
     if (showIntro) markIntroPlayed()
   }, [showIntro])
 
+  const playSnapshot = useRef<{
+    screen: Screen
+    gameMode: 'match' | 'sandbox'
+    board: GameState['board']
+    phase: GameState['phase']
+    turn: GameState['turn']
+    log: GameState['log']
+    reserve: GameState['reserve']
+    shotReady: GameState['shotReady']
+    result: GameState['result']
+    pendingPromotion: GameState['pendingPromotion']
+    setup: GameState['setup']
+    positionHistory: GameState['positionHistory']
+    endReason: GameState['endReason']
+  } | null>(null)
+
   useEffect(() => {
+    const prev = playSnapshot.current
+    if (
+      prev &&
+      prev.screen === screen &&
+      prev.gameMode === gameMode &&
+      prev.board === state.board &&
+      prev.phase === state.phase &&
+      prev.turn === state.turn &&
+      prev.log === state.log &&
+      prev.reserve === state.reserve &&
+      prev.shotReady === state.shotReady &&
+      prev.result === state.result &&
+      prev.pendingPromotion === state.pendingPromotion &&
+      prev.setup === state.setup &&
+      prev.positionHistory === state.positionHistory &&
+      prev.endReason === state.endReason
+    ) {
+      return
+    }
+    playSnapshot.current = {
+      screen,
+      gameMode,
+      board: state.board,
+      phase: state.phase,
+      turn: state.turn,
+      log: state.log,
+      reserve: state.reserve,
+      shotReady: state.shotReady,
+      result: state.result,
+      pendingPromotion: state.pendingPromotion,
+      setup: state.setup,
+      positionHistory: state.positionHistory,
+      endReason: state.endReason,
+    }
     try {
       const payload = {
         screen,
@@ -213,7 +284,16 @@ export default function App() {
     setSel(null)
     setPlacePiece('König')
     setScreen('game')
-    announce('SETTING PHASE')
+    announce('SETTING PHASE — Soldaten')
+  }
+
+  const startZigzag = () => {
+    setGameMode('match')
+    setState(createZigzagSetup(timeControl))
+    setSel(null)
+    setPlacePiece('König')
+    setScreen('game')
+    announce('SETTING PHASE — Double Soldaten')
   }
 
   const startMirrored = () => {
@@ -245,7 +325,8 @@ export default function App() {
 
   useEffect(() => {
     if (screen !== 'game' || gameMode === 'sandbox') return
-    if (state.phase === 'setup-doubles') announce('SETTING PHASE — Double Soldaten')
+    if (state.phase === 'setup-soldiers') announce('SETTING PHASE — Soldaten')
+    else if (state.phase === 'setup-doubles') announce('SETTING PHASE — Double Soldaten')
     else if (state.phase === 'setup-mains') announce('SETTING PHASE — Main Forces')
     else if (state.phase === 'play') announce('BATTLE PHASE')
     else if (state.phase === 'ended') announce(state.endReason?.toUpperCase() ?? 'GAME OVER')
@@ -254,11 +335,25 @@ export default function App() {
 
   useEffect(() => {
     if (state.phase !== 'play' || state.result || gameMode === 'sandbox' || state.pendingPromotion) return
+    const side = state.turn
+    const started = Date.now()
+    const banked = state.clocksMs[side]!
     const id = window.setInterval(() => {
-      setState((prev) => applyAction(prev, { type: 'tick', nowMs: Date.now(), side: prev.turn }).state)
+      const elapsed = Date.now() - started
+      const spent = Math.min(banked, elapsed)
+      if (spent <= 0) return
+      const remaining = banked - spent
+      const shownBefore = Math.ceil(banked / 1000)
+      const shownAfter = Math.ceil(remaining / 1000)
+      if (remaining > 0 && shownAfter === shownBefore) return
+      setState((prev) => {
+        if (prev.turn !== side || prev.phase !== 'play' || prev.result || prev.pendingPromotion) return prev
+        if (prev.clocksMs[side] !== banked) return prev
+        return applyAction(prev, { type: 'tick', nowMs: Date.now(), elapsedMs: spent, side }).state
+      })
     }, 100)
     return () => clearInterval(id)
-  }, [state.phase, state.result, state.turn, gameMode, state.pendingPromotion])
+  }, [state.phase, state.result, state.turn, gameMode, state.pendingPromotion, state.clocksMs])
 
   const lastLog = state.log[state.log.length - 1]
   useEffect(() => {
@@ -281,8 +376,8 @@ export default function App() {
       else if (fuse && skin.sfx.fuse) playBlip('fuse')
       else if (skin.sfx.move) playBlip('move')
     }
-    if (skin.vfx !== 'none' && (capture || fuse)) {
-      setBurst({ id: lastLog.id, kind: skin.vfx === 'slash' ? 'slash' : 'spark' })
+    if (skin.vfx === 'spark' && (capture || fuse)) {
+      setBurst({ id: lastLog.id })
     }
   }, [lastLog, settings.soundEnabled, skin])
 
@@ -299,15 +394,7 @@ export default function App() {
   const targets = useMemo(() => {
     if (!sel || sel.kind !== 'board' || state.phase !== 'play') return []
     return legalTargets(state, sel.file, sel.rank)
-  }, [sel, state])
-
-  const onHoverSquare = useCallback((square: { file: number; rank: number } | null) => {
-    setHoverSq((prev) => {
-      if (!square) return prev ? null : prev
-      if (prev && prev.file === square.file && prev.rank === square.rank) return prev
-      return square
-    })
-  }, [])
+  }, [sel, state.phase, state.turn, state.board, state.reserve, state.shotReady])
 
   const targetMap = useMemo(() => {
     const m = new Map<string, (typeof targets)[0]>()
@@ -318,6 +405,19 @@ export default function App() {
     return m
   }, [targets])
 
+  const onHoverSquare = useCallback(
+    (square: { file: number; rank: number } | null) => {
+      setHoverSq((prev) => {
+        if (!square) return prev ? null : prev
+        const legal = sel?.kind === 'board' && targetMap.has(`${square.file},${square.rank}`)
+        if (!legal) return prev ? null : prev
+        if (prev && prev.file === square.file && prev.rank === square.rank) return prev
+        return square
+      })
+    },
+    [sel, targetMap],
+  )
+
   const preview = useMemo(() => {
     if (state.phase !== 'play' || state.result || state.pendingPromotion) return null
     if (!hoverSq || sel?.kind !== 'board') return null
@@ -326,7 +426,7 @@ export default function App() {
     const stack = state.board[sel.file]?.[sel.rank]
     if (!stack) return null
     return { file: hoverSq.file, rank: hoverSq.rank, stack: carriedStack(stack) }
-  }, [hoverSq, sel, state, targetMap])
+  }, [hoverSq, sel, state.phase, state.result, state.pendingPromotion, state.board, targetMap])
 
   const movableSquares = useMemo(() => {
     const set = new Set<string>()
@@ -339,28 +439,40 @@ export default function App() {
       }
     }
     return set
-  }, [state])
+  }, [state.phase, state.result, state.pendingPromotion, state.turn, state.board, state.reserve, state.shotReady])
 
   const setupSquares = useMemo(() => {
+    if (state.phase === 'setup-soldiers') {
+      const color: Color = state.setup.white.soldiersConfirmed ? 'black' : 'white'
+      return new Set(soldierSetupSquares(state, color).map((s) => `${s.file},${s.rank}`))
+    }
     if (state.phase !== 'setup-mains') return new Set<string>()
     return new Set(setupPlaceSquares(state, state.turn, placePiece).map((s) => `${s.file},${s.rank}`))
-  }, [state, placePiece])
+  }, [state.phase, state.board, state.setup, state.turn, state.reserve, placePiece])
 
   const checkSquare = useMemo(() => {
     if (state.phase !== 'play') return null
     if (!isKoenigInCheck(state, state.turn)) return null
     return findKoenig(state, state.turn)
-  }, [state])
+  }, [state.phase, state.turn, state.board, state.reserve, state.shotReady])
 
-  const chooser: Color = !state.setup.white.doublesConfirmed
-    ? 'white'
-    : !state.setup.black.doublesConfirmed
-      ? 'black'
-      : 'white'
+  const checkThreats = useMemo(() => {
+    if (state.phase !== 'play' || !checkSquare) return []
+    return checkingThreats(state, state.turn)
+  }, [state.phase, state.turn, state.board, state.reserve, state.shotReady, checkSquare])
+
+  const actor: Color = (() => {
+    if (state.phase === 'setup-soldiers') return state.setup.white.soldiersConfirmed ? 'black' : 'white'
+    if (state.phase === 'setup-doubles') {
+      if (!state.setup.white.doublesConfirmed) return 'white'
+      if (!state.setup.black.doublesConfirmed) return 'black'
+    }
+    return state.turn
+  })()
 
   const canPass = state.phase === 'setup-mains' && hasMinimumArmy(state, state.turn)
 
-  const onSquareClick = (file: number, rank: number) => {
+  const onSquareClick = useCallback((file: number, rank: number) => {
     if (gameMode === 'sandbox' && testingTab === 'testmap' && !sel) {
       // spawn if empty
       if (!state.board[file]![rank]) {
@@ -370,8 +482,12 @@ export default function App() {
       }
     }
 
+    if (state.phase === 'setup-soldiers') {
+      dispatch({ type: 'place-soldier', color: actor, file, rank })
+      return
+    }
     if (state.phase === 'setup-doubles') {
-      dispatch({ type: 'toggle-double-file', color: chooser, file })
+      dispatch({ type: 'toggle-double-file', color: actor, file })
       return
     }
     if (state.phase === 'setup-mains') {
@@ -427,28 +543,41 @@ export default function App() {
       if (stack && top(stack)?.color === state.turn) setSel({ kind: 'board', file, rank })
       else setSel(null)
     }
-  }
+  }, [
+    gameMode,
+    testingTab,
+    sel,
+    state.board,
+    state.phase,
+    state.turn,
+    state.pendingPromotion,
+    actor,
+    placePiece,
+    targets,
+    spawnHeight,
+    spawnType,
+    spawnColor,
+    dispatch,
+  ])
 
-  const onDragStart = (file: number, rank: number) => {
+  const onDragStart = useCallback((file: number, rank: number) => {
     if (state.phase !== 'play' || state.result || state.pendingPromotion) return
     setSel({ kind: 'board', file, rank })
     setDrag({ file, rank })
-  }
+  }, [state.phase, state.result, state.pendingPromotion])
 
-  const onDragEnd = (square: { file: number; rank: number } | null) => {
+  const onDragEnd = useCallback((square: { file: number; rank: number } | null) => {
     const from = drag
     setDrag(null)
-    if (!from || !square) return
-    if (square.file === from.file && square.rank === from.rank) return
-    if (!targetMap.has(`${square.file},${square.rank}`)) return
+    if (!from || !square) return false
+    if (square.file === from.file && square.rank === from.rank) return false
+    if (!targetMap.has(`${square.file},${square.rank}`)) return false
     onSquareClick(square.file, square.rank)
-  }
+    return true
+  }, [drag, targetMap, onSquareClick])
 
   const importComposition = (c: SavedComposition) => {
-    if (c.side !== state.turn && state.phase === 'setup-mains') {
-      // still allow load for that side's turn later — force to composition side turn
-    }
-    setState(applyCompositionToSetup(state, c.side, c.doubleFiles, c.placements))
+    setState(applyCompositionToSetup(state, c.side, c.doubleFiles, c.placements, c.soldierRanks))
     setPlacePiece('Turm')
     announce(`LOADED: ${c.name}`)
   }
@@ -472,6 +601,7 @@ export default function App() {
       name,
       side,
       doubleFiles: state.setup[side].doubleFiles.length === 5 ? state.setup[side].doubleFiles : [0, 2, 4, 5, 7],
+      soldierRanks: [...state.setup[side].soldierRanks],
       placements,
       createdAt: Date.now(),
     }
@@ -481,6 +611,7 @@ export default function App() {
   if (screen === 'menu') {
     return (
       <div className="shell menu-shell">
+        <MenuBackdrop skinId={settings.skinId} />
         <AmbientFx kind={settings.ambientFx} accent={settings.accent} />
         {showIntro && (
           <IntroOverlay
@@ -505,9 +636,6 @@ export default function App() {
           </label>
           <button type="button" className="btn primary" onClick={startGame}>
             Play Local
-          </button>
-          <button type="button" className="btn" onClick={startMirrored}>
-            Play Local — Mirrored preset (skip setup)
           </button>
           <button type="button" className="btn" onClick={() => setScreen('settings')}>
             Settings
@@ -542,14 +670,16 @@ export default function App() {
 
   if (screen === 'profile') {
     return (
-      <ProfileView
-        settings={settings}
-        onChange={(next) => {
-          setSettings(next)
-          saveSettings(next)
-        }}
-        onBack={() => setScreen('menu')}
-      />
+      <SkinScope skinId={settings.skinId}>
+        <ProfileView
+          settings={settings}
+          onChange={(next) => {
+            setSettings(next)
+            saveSettings(next)
+          }}
+          onBack={() => setScreen('menu')}
+        />
+      </SkinScope>
     )
   }
 
@@ -585,9 +715,10 @@ export default function App() {
   }
 
   if (screen === 'testing') {
-    const units = [...new Set(UNIT_SCENARIOS.map((s) => s.unit))]
+    const units = UNIT_ORDER.filter((unit) => UNIT_SCENARIOS.some((s) => s.unit === unit))
     const scenarios = UNIT_SCENARIOS.filter((s) => s.unit === unitFilter)
     return (
+      <SkinScope skinId={settings.skinId}>
       <div className="shell testing-shell">
         <header className="topbar">
           <button type="button" className="btn ghost small" onClick={() => setScreen('menu')}>
@@ -596,6 +727,16 @@ export default function App() {
           <h1>Testing</h1>
           <div />
         </header>
+        <div className="panel">
+          <h2>Setup shortcuts</h2>
+          <p className="hint">Same battle rules. These skip placing the army.</p>
+          <button type="button" className="btn" onClick={startZigzag}>
+            Zigzag map (soldiers fixed)
+          </button>
+          <button type="button" className="btn" onClick={startMirrored}>
+            Mirrored preset (skip setup)
+          </button>
+        </div>
         <div className="test-tabs">
           <button type="button" className={testingTab === 'guide-rules' ? 'active' : ''} onClick={() => setTestingTab('guide-rules')}>
             Guide · Rules
@@ -622,12 +763,15 @@ export default function App() {
         {testingTab === 'guide-units' && (
           <div className="units-layout">
             <div className="piece-picker">
-              {units.map((u) => (
-                <button key={u} type="button" className={unitFilter === u ? 'active' : ''} onClick={() => setUnitFilter(u)}>
-                  {KNOWN_PIECES.has(u as PieceType) && <PieceIcon type={u as PieceType} color="white" />}
-                  {u}
-                </button>
-              ))}
+              {units.map((u) => {
+                const icon = UNIT_ICON[u]
+                return (
+                  <button key={u} type="button" className={unitFilter === u ? 'active' : ''} onClick={() => setUnitFilter(u)}>
+                    {icon && <PieceIcon type={icon.type} fusion={icon.fusion} color="white" />}
+                    {u}
+                  </button>
+                )
+              })}
             </div>
             <div className="scenario-grid">
               {scenarios.map((s) => (
@@ -653,14 +797,17 @@ export default function App() {
           </div>
         )}
       </div>
+      </SkinScope>
     )
   }
 
   // GAME SCREEN
-  const guidance = guidanceText(state, chooser, placePiece, gameMode)
+  const guidance = guidanceText(state, actor, placePiece, gameMode, checkSquare != null)
 
   return (
+    <SkinScope skinId={settings.skinId}>
     <div className="shell game-shell">
+      <AmbientFx kind={settings.ambientFx} accent={settings.accent} />
       {banner && (
         <div key={bannerKey} className="phase-banner" onAnimationEnd={() => setBanner(null)}>
           <span>{banner}</span>
@@ -706,24 +853,41 @@ export default function App() {
           </button>
           <h1>Myriad Chess</h1>
         </div>
-        <div className={`turn-pill turn-${activeSide(state, chooser)}`}>
+        <div className={`turn-pill turn-${actor}`}>
           <span className="turn-dot" />
           {guidance.title}
         </div>
-        <button
-          type="button"
-          className="btn small"
-          onClick={() => {
-            if (gameMode === 'sandbox') setState(createEmptyPlayState(timeControl))
-            else {
-              setState(createInitialState(timeControl))
-              announce('SETTING PHASE')
-            }
-            setSel(null)
-          }}
-        >
-          Restart
-        </button>
+        <div className="topbar-actions">
+          <button
+            type="button"
+            className={settings.showCrests ? 'btn small primary' : 'btn small'}
+            aria-pressed={settings.showCrests}
+            onClick={() => {
+              const next = { ...settings, showCrests: !settings.showCrests }
+              setSettings(next)
+              saveSettings(next)
+            }}
+          >
+            Crests
+          </button>
+          <button
+            type="button"
+            className="btn small"
+            onClick={() => {
+              if (gameMode === 'sandbox') setState(createEmptyPlayState(timeControl))
+              else if (state.setupVariant === 'zigzag') {
+                setState(createZigzagSetup(timeControl))
+                announce('SETTING PHASE — Double Soldaten')
+              } else {
+                setState(createInitialState(timeControl))
+                announce('SETTING PHASE — Soldaten')
+              }
+              setSel(null)
+            }}
+          >
+            Restart
+          </button>
+        </div>
       </header>
 
       <p className="guide">{guidance.detail}</p>
@@ -731,24 +895,42 @@ export default function App() {
       <div className="layout">
         <aside className="side">
           {gameMode === 'match' && <ClockPanel state={state} />}
-          <ArmyPanel state={state} color="white" active={activeSide(state, chooser) === 'white'} />
-          <ArmyPanel state={state} color="black" active={activeSide(state, chooser) === 'black'} />
+          <ArmyPanel state={state} color="white" active={actor === 'white'} />
+          <ArmyPanel state={state} color="black" active={actor === 'black'} />
+
+          {state.phase === 'setup-soldiers' && (
+            <div className="panel">
+              <h2>Soldaten</h2>
+              <p className="hint">
+                One per file for {label(actor)}, on ranks {actor === 'white' ? '2–3' : '8–9'}. Not the back rank.{' '}
+                {state.setup[actor].soldierRanks.filter((r) => r >= 0).length}/10
+              </p>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={state.setup[actor].soldierRanks.filter((r) => r >= 0).length !== 10}
+                onClick={() => dispatch({ type: 'confirm-soldiers', color: actor })}
+              >
+                Confirm soldiers
+              </button>
+            </div>
+          )}
 
           {state.phase === 'setup-doubles' && (
             <div className="panel">
               <h2>Double Soldaten</h2>
               <p className="hint">
-                Click 5 zigzag files for {chooser}. {state.setup[chooser].doubleFiles.length}/5
+                Click 5 soldier files for {label(actor)}. {state.setup[actor].doubleFiles.length}/5
               </p>
               <button
                 type="button"
                 className="btn primary"
-                disabled={state.setup[chooser].doubleFiles.length !== 5}
+                disabled={state.setup[actor].doubleFiles.length !== 5}
                 onClick={() =>
                   dispatch({
                     type: 'confirm-doubles',
-                    color: chooser,
-                    files: state.setup[chooser].doubleFiles,
+                    color: actor,
+                    files: state.setup[actor].doubleFiles,
                   })
                 }
               >
@@ -889,16 +1071,18 @@ export default function App() {
         </aside>
 
         <main className={skin.id === 'signal' ? 'board-wrap signal-board' : 'board-wrap'}>
-          {burst && <div key={burst.id} className={`board-fx fx-${burst.kind}`} />}
+          {burst && <div key={burst.id} className="board-fx fx-spark" />}
           <Board3D
             state={state}
             selected={sel?.kind === 'board' ? sel : null}
-            targetMap={settings.showLegalDots ? targetMap : new Map()}
+            targetMap={settings.showLegalDots ? targetMap : EMPTY_TARGET_MAP}
             setupSquares={setupSquares}
-            doubleFiles={state.phase === 'setup-doubles' ? state.setup[chooser].doubleFiles : []}
-            chooser={chooser}
+            doubleFiles={state.phase === 'setup-doubles' ? state.setup[actor].doubleFiles : NO_DOUBLE_FILES}
+            chooser={actor}
             checkSquare={checkSquare}
+            threats={checkThreats}
             showCoords={settings.showCoords}
+            showCrests={settings.showCrests}
             light={settings.boardLight}
             dark={settings.boardDark}
             accent={settings.accent}
@@ -911,6 +1095,7 @@ export default function App() {
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
             onSquareClick={onSquareClick}
+            skinId={settings.skinId}
           />
         </main>
 
@@ -926,6 +1111,7 @@ export default function App() {
         </aside>
       </div>
     </div>
+    </SkinScope>
   )
 }
 
@@ -938,11 +1124,6 @@ function findKoenig(state: GameState, color: Color) {
   return null
 }
 
-function activeSide(state: GameState, chooser: Color): Color {
-  if (state.phase === 'setup-doubles') return chooser
-  return state.turn
-}
-
 function remainingToPlace(state: GameState, color: Color, piece: PieceType): number {
   const pool = state.setup[color].pool[piece] ?? 0
   const res = state.reserve[color].filter((p) => p === piece).length
@@ -950,9 +1131,23 @@ function remainingToPlace(state: GameState, color: Color, piece: PieceType): num
   return pool + res
 }
 
-function guidanceText(state: GameState, chooser: Color, placePiece: PieceType, mode: 'match' | 'sandbox') {
+function guidanceText(
+  state: GameState,
+  chooser: Color,
+  placePiece: PieceType,
+  mode: 'match' | 'sandbox',
+  inCheck: boolean,
+) {
   if (mode === 'sandbox') return { title: 'Sandbox', detail: 'Explore freely — clocks paused.' }
   if (state.result) return { title: 'Game over', detail: state.endReason ?? '' }
+  if (state.phase === 'setup-soldiers') {
+    const n = state.setup[chooser].soldierRanks.filter((r) => r >= 0).length
+    const ranks = chooser === 'white' ? '2 or 3' : '8 or 9'
+    return {
+      title: `${label(chooser)} — place Soldaten`,
+      detail: `One Soldat per file, on rank ${ranks}. Not the back rank. ${n}/10. Click a Soldat again to pick it up.`,
+    }
+  }
   if (state.phase === 'setup-doubles') {
     return {
       title: `${label(chooser)} — choose doubles`,
@@ -966,7 +1161,7 @@ function guidanceText(state: GameState, chooser: Color, placePiece: PieceType, m
       detail: `Place ${placePiece} (${left} left). Marked squares are legal. Pass when ready.`,
     }
   }
-  const check = isKoenigInCheck(state, state.turn) ? ' — König in check!' : ''
+  const check = inCheck ? ' — König in check!' : ''
   return {
     title: `${label(state.turn)} to move${check}`,
     detail: 'Click your stack, then a highlighted square. Darker squares are captures.',
@@ -1003,7 +1198,12 @@ function ArmyPanel({ state, color, active }: { state: GameState; color: Color; a
   return (
     <div className={`panel army ${active ? 'army-active' : ''}`}>
       <h2>{label(color)} army</h2>
-      {state.phase === 'setup-mains' || state.phase === 'setup-doubles' ? (
+      {state.phase === 'setup-soldiers' ? (
+        <p className="hint">
+          {state.setup[color].soldierRanks.filter((r) => r >= 0).length}/10 Soldaten
+          {state.setup[color].soldiersConfirmed ? ' · confirmed' : ''}
+        </p>
+      ) : state.phase === 'setup-mains' || state.phase === 'setup-doubles' ? (
         <ul className="army-list">
           {items.map((p) => {
             const left = remainingToPlace(state, color, p)

@@ -11,11 +11,6 @@
   --dark: #7a756e;
   --gold: #d8d4cc;
   --gold-hot: #f7f4ee;
-  --danger: #2a2a2a;
-  --ok: #f4f1ea;
-  --white-piece: #f4efe4;
-  --black-piece: #2a2a32;
-  --radius: 0px;
   font-family: 'Silkscreen', monospace;
   color: var(--ink);
   background: var(--bg0);
@@ -52,6 +47,19 @@ select {
   place-items: center;
   padding: 2rem;
   overflow: hidden;
+}
+
+.menu-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.menu-backdrop canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .menu-card {
@@ -100,8 +108,7 @@ select {
   margin-bottom: 0.35rem;
 }
 
-.menu-field select,
-.settings-grid select {
+.menu-field select {
   background: #1a1a1a;
   color: var(--ink);
   border: 3px solid #3a3a3a;
@@ -162,6 +169,7 @@ select {
   margin: 0 auto;
   padding: 0.85rem 1.1rem 2rem;
   position: relative;
+  z-index: 1;
 }
 
 .phase-banner {
@@ -212,11 +220,6 @@ select {
   place-items: center;
   background: rgba(0, 0, 0, 0.62);
   padding: 1.2rem;
-}
-
-.popup-layer.popup-check {
-  background: none;
-  pointer-events: none;
 }
 
 .check-toast {
@@ -294,6 +297,12 @@ select {
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.55rem;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
 }
 
 .topbar h1 {
@@ -631,35 +640,6 @@ select {
   color: var(--muted);
 }
 
-.settings-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-.settings-grid label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.9rem;
-  color: var(--muted);
-}
-
-.settings-grid label.check {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.settings-grid input[type='color'] {
-  width: 100%;
-  height: 2rem;
-  border: 3px solid #3a3a3a;
-  background: transparent;
-  padding: 0;
-}
-
 .comp-list {
   list-style: none;
   margin: 0 0 1rem;
@@ -727,6 +707,16 @@ select {
   height: 100%;
   pointer-events: none;
   z-index: 0;
+}
+
+.game-shell .ambient-fx {
+  position: fixed;
+}
+
+.game-shell .topbar,
+.game-shell .layout {
+  position: relative;
+  z-index: 1;
 }
 
 .settings-tabs {
@@ -882,11 +872,6 @@ select {
   text-align: center;
 }
 
-.fusion-pair {
-  display: flex;
-  gap: 0.1rem;
-}
-
 .profile-piece .piece-icon {
   width: 52px;
   height: 52px;
@@ -916,11 +901,6 @@ select {
     linear-gradient(var(--gold), var(--gold)) 48% 62% / 10px 4px no-repeat,
     linear-gradient(#f4f1ea, #f4f1ea) 30% 74% / 4px 10px no-repeat;
   animation: fxOut 0.48s steps(3, end) forwards;
-}
-
-.fx-slash {
-  background: linear-gradient(115deg, transparent 42%, var(--gold) 42% 50%, transparent 50%);
-  animation: fxOut 0.36s steps(2, end) forwards;
 }
 
 @keyframes fxOut {

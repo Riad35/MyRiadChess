@@ -2,7 +2,7 @@ import type { PieceType } from '../engine/types'
 import type { FusionId } from '../view/sprites'
 
 export type MoveAnim = 'none' | 'hop' | 'slide'
-export type VfxId = 'none' | 'spark' | 'slash'
+export type VfxId = 'none' | 'spark'
 
 export interface SkinPack {
   id: string
@@ -31,6 +31,25 @@ export const SKINS: SkinPack[] = [
     moveAnim: 'hop',
     sfx: { move: true, capture: true, fuse: true },
     vfx: 'spark',
+  },
+  {
+    id: 'chessmen',
+    name: 'Chessmen',
+    description: 'Carved figures for Bishop, Dame, Ritter, Soldat, Doppelsoldat, Doppelturm, and Doppelbishop. The other figures stay classic.',
+    sprites: {
+      Bishop: 'skins/chessmen/bishop',
+      Dame: 'skins/chessmen/dame',
+      Ritter: 'skins/chessmen/ritter',
+      Soldat: 'skins/chessmen/soldat',
+    },
+    fusions: {
+      doppelsoldat: 'skins/chessmen/doppelsoldat',
+      doppelturm: 'skins/chessmen/doppelturm',
+      doppelbishop: 'skins/chessmen/doppelbishop',
+    },
+    moveAnim: 'none',
+    sfx: { move: false, capture: false, fuse: false },
+    vfx: 'none',
   },
 ]
 

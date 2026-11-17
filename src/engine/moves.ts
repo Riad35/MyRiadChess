@@ -5,8 +5,10 @@
 import type { Color, GameState, PieceType, Stack } from './types'
 import {
   enemy,
+  FILES,
   forwardDir,
   inBounds,
+  RANKS,
   sqKey,
   top,
 } from './coords'
@@ -19,6 +21,12 @@ export interface Target {
   /** Optional path squares for multi-leg moves (exclusive of start, inclusive of end). */
   path?: { file: number; rank: number }[]
   mode?: 'ritter' | 'drache' | 'split' | 'unit'
+}
+
+export type CheckThreat = {
+  kind: 'ray' | 'leap'
+  /** Ray: attacker through the path to the König. Leap: the attacker only. */
+  squares: { file: number; rank: number }[]
 }
 
 function cell(state: GameState, f: number, r: number): Stack | null {
@@ -43,7 +51,7 @@ function empty(state: GameState, f: number, r: number): boolean {
 /** Effective move identity of a stack (top + special combos). */
 export function effectiveMover(stack: Stack): {
   primary: PieceType
-  combo: 'none' | 'bishop-turm' | 'drache-ritter' | 'double-ritter' | 'double-drache' | 'double-bishop' | 'double-turm' | 'double-dame'
+  combo: 'none' | 'bishop-turm' | 'drache-ritter' | 'double-ritter' | 'double-drache' | 'double-bishop' | 'double-turm'
 } {
   const topP = stack[stack.length - 1]!
   if (stack.length >= 2) {
@@ -53,7 +61,6 @@ export function effectiveMover(stack: Stack): {
     if (a === 'Drache' && b === 'Drache') return { primary: a, combo: 'double-drache' }
     if (a === 'Bishop' && b === 'Bishop') return { primary: a, combo: 'double-bishop' }
     if (a === 'Turm' && b === 'Turm') return { primary: a, combo: 'double-turm' }
-    if (a === 'Dame' && b === 'Dame') return { primary: a, combo: 'double-dame' }
     const types = new Set(stack.map((p) => p.type))
     if (types.has('Turm') && types.has('Bishop') && !types.has('König') && !types.has('Dame')) {
       // physical 2-stack Bishop+Turm (order irrelevant for move)
@@ -78,7 +85,6 @@ const LOCKED_FIGURES = new Set([
   'bishop-turm',
   'drache-ritter',
   'double-turm',
-  'double-dame',
 ])
 
 function lockedFigure(stack: Stack): boolean {
@@ -116,7 +122,7 @@ function canFuseOnto(moving: Stack, target: Stack): string | null {
     (mTop.type === 'König' || mTop.type === 'Dame') &&
     target.some((p) => p.type === 'König' || p.type === 'Dame')
   ) {
-    return 'König/Dame cannot share a stack (Doppeldame only via promotion)'
+    return 'König and Dame cannot share a stack'
   }
   // identical royals already covered
   return null
@@ -305,73 +311,85 @@ function soldatTargets(
   return out
 }
 
+function onRim(file: number, rank: number) {
+  return file === 0 || rank === 0 || file === FILES - 1 || rank === RANKS - 1
+}
+
+/**
+ * Chess-rook slide, plus one 90° turn from an empty outermost square that slide reaches.
+ * That turn stays on the outermost squares. A capture or a fusion ends the move.
+ * There is no second bounce and no castling.
+ */
 function doubleTurmTargets(
   state: GameState,
   color: Color,
   file: number,
   rank: number,
   moving: Stack,
+  kindShoot = false,
 ): Target[] {
   const out: Target[] = []
-  // First leg ortho any distance, then exactly one 90° turn, second leg.
-  for (const [df1, dr1] of ORTHO) {
-    let f = file + df1
-    let r = rank + dr1
-    const path1: { file: number; rank: number }[] = []
+  const stopOn = (f: number, r: number, occ: Stack, path: { file: number; rank: number }[]) => {
+    if (top(occ)!.color !== color) {
+      out.push({
+        file: f,
+        rank: r,
+        kind: kindShoot ? 'shoot' : 'capture',
+        path: [...path, { file: f, rank: r }],
+      })
+      return
+    }
+    if (kindShoot) return
+    const err = canFuseOnto(moving, occ)
+    if (!err) {
+      out.push({ file: f, rank: r, kind: 'fuse', path: [...path, { file: f, rank: r }] })
+    }
+  }
+
+  for (const [df, dr] of ORTHO) {
+    let f = file + df
+    let r = rank + dr
+    const path: { file: number; rank: number }[] = []
     while (inBounds(f, r)) {
       const occ = cell(state, f, r)
       if (occ) {
-        if (top(occ)!.color === color) break
-        // capture stops here — no second leg
-        out.push({
-          file: f,
-          rank: r,
-          kind: 'capture',
-          path: [...path1, { file: f, rank: r }],
-        })
+        stopOn(f, r, occ, path)
         break
       }
-      path1.push({ file: f, rank: r })
-      // From this empty bend point, second leg perpendicular
-      const bends: [number, number][] =
-        df1 !== 0
-          ? [
-              [0, 1],
-              [0, -1],
-            ]
-          : [
-              [1, 0],
-              [-1, 0],
-            ]
-      for (const [df2, dr2] of bends) {
-        let f2 = f + df2
-        let r2 = r + dr2
-        const path2 = [...path1]
-        while (inBounds(f2, r2)) {
-          // disallow returning to start
-          if (f2 === file && r2 === rank) break
-          const occ2 = cell(state, f2, r2)
-          if (!occ2) {
-            path2.push({ file: f2, rank: r2 })
-            out.push({ file: f2, rank: r2, kind: 'move', path: [...path2] })
-          } else if (top(occ2)!.color !== color) {
-            path2.push({ file: f2, rank: r2 })
-            out.push({ file: f2, rank: r2, kind: 'capture', path: [...path2] })
-            break
-          } else {
-            const err = canFuseOnto(moving, occ2)
-            if (!err) {
-              path2.push({ file: f2, rank: r2 })
-              out.push({ file: f2, rank: r2, kind: 'fuse', path: [...path2] })
+      path.push({ file: f, rank: r })
+      if (!kindShoot) out.push({ file: f, rank: r, kind: 'move', path: [...path] })
+      if (onRim(f, r)) {
+        const turns: [number, number][] =
+          df !== 0
+            ? [
+                [0, 1],
+                [0, -1],
+              ]
+            : [
+                [1, 0],
+                [-1, 0],
+              ]
+        for (const [df2, dr2] of turns) {
+          let f2 = f + df2
+          let r2 = r + dr2
+          const path2 = [...path]
+          while (inBounds(f2, r2)) {
+            if (f2 === file && r2 === rank) break
+            if (!onRim(f2, r2)) break
+            const occ2 = cell(state, f2, r2)
+            if (occ2) {
+              stopOn(f2, r2, occ2, path2)
+              break
             }
-            break
+            path2.push({ file: f2, rank: r2 })
+            if (!kindShoot) out.push({ file: f2, rank: r2, kind: 'move', path: [...path2] })
+            f2 += df2
+            r2 += dr2
           }
-          f2 += df2
-          r2 += dr2
         }
       }
-      f += df1
-      r += dr1
+      f += df
+      r += dr
     }
   }
   return out
@@ -413,7 +431,86 @@ function doubleJumpTargets(
   return out
 }
 
+/** One diagonal slide. A board edge flips the axis that hit it, once. Pieces stop the ray. */
+function doppelbishopTargets(
+  state: GameState,
+  color: Color,
+  file: number,
+  rank: number,
+  moving: Stack,
+  kindShoot = false,
+): Target[] {
+  const out: Target[] = []
+  for (const [df0, dr0] of DIAG) {
+    let df: number = df0
+    let dr: number = dr0
+    let f = file
+    let r = rank
+    let bounced = false
+    const path: { file: number; rank: number }[] = []
+    const visited = new Set<string>([sqKey(file, rank)])
+    while (path.length < FILES * RANKS) {
+      const nf = f + df
+      const nr = r + dr
+      if (!inBounds(nf, nr)) {
+        if (bounced || path.length === 0) break
+        const ndf = nf < 0 || nf >= FILES ? -df : df
+        const ndr = nr < 0 || nr >= RANKS ? -dr : dr
+        if (ndf === df && ndr === dr) break
+        df = ndf
+        dr = ndr
+        bounced = true
+        continue
+      }
+      const key = sqKey(nf, nr)
+      if (visited.has(key)) break
+      visited.add(key)
+      const occ = cell(state, nf, nr)
+      path.push({ file: nf, rank: nr })
+      if (!occ) {
+        if (!kindShoot) out.push({ file: nf, rank: nr, kind: 'move', path: [...path] })
+      } else {
+        const t = top(occ)!
+        if (t.color === color) {
+          if (!kindShoot) {
+            const err = canFuseOnto(moving, occ)
+            if (!err) out.push({ file: nf, rank: nr, kind: 'fuse', path: [...path] })
+          }
+        } else {
+          out.push({ file: nf, rank: nr, kind: kindShoot ? 'shoot' : 'capture', path: [...path] })
+        }
+        break
+      }
+      f = nf
+      r = nr
+    }
+  }
+  return out
+}
+
+const moveCache = new WeakMap<(Stack | null)[][], Map<string, Target[]>>()
+
 export function generateMovesFrom(
+  state: GameState,
+  file: number,
+  rank: number,
+  opts?: { mode?: 'ritter' | 'drache'; asShoot?: boolean },
+): Target[] {
+  if (opts?.asShoot || opts?.mode) return collectMoves(state, file, rank, opts)
+  let bySquare = moveCache.get(state.board)
+  if (!bySquare) {
+    bySquare = new Map()
+    moveCache.set(state.board, bySquare)
+  }
+  const key = sqKey(file, rank)
+  const hit = bySquare.get(key)
+  if (hit) return hit
+  const moves = collectMoves(state, file, rank)
+  bySquare.set(key, moves)
+  return moves
+}
+
+function collectMoves(
   state: GameState,
   file: number,
   rank: number,
@@ -428,7 +525,11 @@ export function generateMovesFrom(
     const { primary, combo } = effectiveMover(stack)
     // shoot uses top pattern; cannot hit enemy König
     let raw: Target[] = []
-    if (combo === 'double-bishop' || combo === 'bishop-turm' || primary === 'Dame') {
+    if (combo === 'double-bishop') {
+      raw = doppelbishopTargets(state, color, file, rank, stack, true)
+    } else if (combo === 'double-turm') {
+      raw = doubleTurmTargets(state, color, file, rank, stack, true)
+    } else if (combo === 'bishop-turm' || primary === 'Dame') {
       raw = slide(state, color, file, rank, ALL8, stack, true)
     } else if (primary === 'Turm') {
       raw = slide(state, color, file, rank, ORTHO, stack, true)
@@ -485,11 +586,9 @@ export function generateMovesFrom(
     case 'double-drache':
       return finish(doubleJumpTargets(state, color, file, rank, INF_OFFSETS, moving))
     case 'double-bishop':
+      return finish(doppelbishopTargets(state, color, file, rank, moving))
     case 'bishop-turm':
       return finish(slide(state, color, file, rank, ALL8, moving))
-    case 'double-dame':
-      // simplified: two queen-legs same modality generated as two-step slides
-      return finish(doubleDameTargets(state, color, file, rank, moving))
     case 'drache-ritter': {
       // Show both patterns — no manual mode toggle (chess-like click-to-move).
       if (opts?.mode === 'drache') {
@@ -557,69 +656,36 @@ export function generateMovesFrom(
   }
 }
 
-function doubleDameTargets(
-  state: GameState,
-  color: Color,
-  file: number,
-  rank: number,
-  moving: Stack,
-): Target[] {
-  // Generate all positions reachable in 1 queen move, then from there another of SAME modality
-  const out: Target[] = []
-  const firstOrtho = slide(state, color, file, rank, ORTHO, moving)
-  const firstDiag = slide(state, color, file, rank, DIAG, moving)
-
-  const expand = (first: Target[], dirs: readonly (readonly [number, number])[]) => {
-    for (const t of first) {
-      // stop early options (one leg only)
-      out.push(t)
-      if (t.kind === 'capture' || t.kind === 'fuse') continue
-      // second leg from empty landing
-      const second = slide(state, color, t.file, t.rank, dirs, moving)
-      for (const s of second) {
-        if (s.file === file && s.rank === rank) continue
-        out.push({
-          ...s,
-          path: [
-            { file: t.file, rank: t.rank },
-            { file: s.file, rank: s.rank },
-          ],
-        })
-      }
-    }
-  }
-  expand(firstOrtho, ORTHO)
-  expand(firstDiag, DIAG)
-  return out
+function countsAsAttack(kind: Target['kind']): boolean {
+  return kind === 'capture' || kind === 'move'
 }
 
-/** Squares attacked by color (for check / König safety). Shoots do not attack König. */
+/** Squares a side can move or capture onto. Shots are not attacks. */
 export function attackedSquares(state: GameState, by: Color): Set<string> {
   const set = new Set<string>()
   for (let f = 0; f < 10; f++) {
     for (let r = 0; r < 10; r++) {
       const stack = state.board[f]![r]
       if (!stack || top(stack)?.color !== by) continue
-      // Use capture/move generation but treat as attacks: generateMoves and take capture+move onto enemy/empty
-      // For attack map we need any square the piece could capture onto (including empty for rays — actually attack = can capture if enemy there)
-      const moves = generateMovesFrom(state, f, r)
-      for (const m of moves) {
-        if (m.kind === 'split') continue
-        // attack squares = where an enemy piece would be captured
-        if (m.kind === 'capture' || m.kind === 'move' || m.kind === 'fuse') {
-          // For check, only capture matters; for "threatened square" for König, empty squares that are attacked count
-          if (m.kind === 'fuse') continue
-          set.add(sqKey(m.file, m.rank))
-        }
+      for (const m of generateMovesFrom(state, f, r)) {
+        if (countsAsAttack(m.kind)) set.add(sqKey(m.file, m.rank))
       }
-      // Also add pseudo-attacks for sliding onto empty (already in move)
     }
   }
   return set
 }
 
 export function isSquareAttacked(state: GameState, file: number, rank: number, by: Color): boolean {
-  return attackedSquares(state, by).has(sqKey(file, rank))
+  for (let f = 0; f < 10; f++) {
+    for (let r = 0; r < 10; r++) {
+      const stack = state.board[f]![r]
+      if (!stack || top(stack)?.color !== by) continue
+      for (const m of generateMovesFrom(state, f, r)) {
+        if (countsAsAttack(m.kind) && m.file === file && m.rank === rank) return true
+      }
+    }
+  }
+  return false
 }
 
 export function isKoenigInCheck(state: GameState, color: Color): boolean {
@@ -628,17 +694,105 @@ export function isKoenigInCheck(state: GameState, color: Color): boolean {
   return isSquareAttacked(state, pos.file, pos.rank, enemy(color))
 }
 
-/** Detach top N pieces as moving stack for unstack moves — handled in apply. */
+function isLeapThreat(stack: Stack): boolean {
+  const { primary, combo } = effectiveMover(carriedStack(stack))
+  if (combo === 'double-ritter' || combo === 'double-drache' || combo === 'drache-ritter') return true
+  if (combo !== 'none') return false
+  return primary === 'Ritter' || primary === 'Drache'
+}
+
+function alignedLine(
+  from: { file: number; rank: number },
+  to: { file: number; rank: number },
+): { file: number; rank: number }[] | null {
+  const df = Math.sign(to.file - from.file)
+  const dr = Math.sign(to.rank - from.rank)
+  const stepsF = Math.abs(to.file - from.file)
+  const stepsR = Math.abs(to.rank - from.rank)
+  if (stepsF !== 0 && stepsR !== 0 && stepsF !== stepsR) return null
+  const n = Math.max(stepsF, stepsR)
+  const out: { file: number; rank: number }[] = []
+  for (let i = 0; i <= n; i++) out.push({ file: from.file + df * i, rank: from.rank + dr * i })
+  return out
+}
+
+/** Attacker, then every square of the move, through to the landing square. */
+function attackSquares(
+  start: { file: number; rank: number },
+  move: Target,
+): { file: number; rank: number }[] {
+  const end = { file: move.file, rank: move.rank }
+  const marks = move.path && move.path.length > 0 ? move.path : [end]
+  const squares = [start]
+  let prev = start
+  for (const mark of marks) {
+    const seg = alignedLine(prev, mark)
+    if (seg) squares.push(...seg.slice(1))
+    else if (prev.file !== mark.file || prev.rank !== mark.rank) squares.push(mark)
+    prev = mark
+  }
+  if (prev.file !== end.file || prev.rank !== end.rank) {
+    const seg = alignedLine(prev, end)
+    if (seg) squares.push(...seg.slice(1))
+    else squares.push(end)
+  }
+  return squares
+}
+
+/** Enemy pieces that attack this color's König, with the squares the check light follows. */
+export function checkingThreats(state: GameState, color: Color): CheckThreat[] {
+  const king = findKoenig(state, color)
+  if (!king) return []
+  const by = enemy(color)
+  const threats: CheckThreat[] = []
+  for (let f = 0; f < FILES; f++) {
+    for (let r = 0; r < RANKS; r++) {
+      const stack = state.board[f]![r]
+      if (!stack || top(stack)?.color !== by) continue
+      const hits = generateMovesFrom(state, f, r).filter(
+        (m) => m.kind === 'capture' && m.file === king.file && m.rank === king.rank,
+      )
+      if (hits.length === 0) continue
+      if (isLeapThreat(stack)) {
+        threats.push({ kind: 'leap', squares: [{ file: f, rank: r }] })
+        continue
+      }
+      let best: { file: number; rank: number }[] | null = null
+      for (const hit of hits) {
+        const path = attackSquares({ file: f, rank: r }, hit)
+        if (!best || path.length < best.length) best = path
+      }
+      if (best) threats.push({ kind: 'ray', squares: best })
+    }
+  }
+  return threats
+}
+
 export function wouldLeaveKoenigInCheck(
   state: GameState,
   color: Color,
   mutate: (s: GameState) => void,
+  touch: { file: number; rank: number }[] = [],
 ): boolean {
-  const draft: GameState = {
-    ...state,
-    board: state.board.map((file) => file.map((c) => (c ? c.map((p) => ({ ...p })) : null))),
-    shotReady: new Set(state.shotReady),
+  const board = state.board.map((file) => file.slice())
+  const seen = new Set<number>()
+  const squares = touch.length > 0 ? touch : allSquares()
+  for (const sq of squares) {
+    const id = sq.file * 10 + sq.rank
+    if (seen.has(id)) continue
+    seen.add(id)
+    const cell = state.board[sq.file]?.[sq.rank]
+    if (cell) board[sq.file]![sq.rank] = cell.map((p) => ({ ...p }))
   }
+  const draft: GameState = { ...state, board, shotReady: new Set(state.shotReady) }
   mutate(draft)
   return isKoenigInCheck(draft, color)
+}
+
+function allSquares(): { file: number; rank: number }[] {
+  const squares: { file: number; rank: number }[] = []
+  for (let file = 0; file < FILES; file++) {
+    for (let rank = 0; rank < RANKS; rank++) squares.push({ file, rank })
+  }
+  return squares
 }

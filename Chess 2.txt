@@ -152,7 +152,7 @@ VII. DIE WANDLUNGEN
 VII.1 Gleiche Figuren — Höhere Formen
 R+R Doppelritter: zwei (3,2)-Sprünge; Zwischenfeld frei; Schlag nur Endfeld.
 Dr+Dr Doppeldrache: zwei (2,2); analog.
-B+B Doppelbishop: bewegt wie Dame.
+B+B Pope: nur diagonal; prallt einmal an der Brettkante ab und läuft in demselben Zug weiter; Figuren stoppen (kein Abprall an Gegnern); kein Damenzug orthogonal.
 T+T Doppelturm: orthogonal, genau eine 90°-Abzweigung; kein Zurück zum Start; nicht durch eigene Figuren; bei Schlag auf dem Weg Stop.
 D+D Doppeldame: nur aus Doppelsoldat-Umwandlung; zwei Teilzüge gleicher Art (beide ortho oder beide diag); max ein Schlag; auf eigenen Soldaten → Stop und 3er.
 

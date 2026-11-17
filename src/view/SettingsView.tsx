@@ -110,6 +110,10 @@ export function SettingsView({
               Show coordinates
             </label>
             <label className="check">
+              <input type="checkbox" checked={settings.showCrests} onChange={(e) => set('showCrests', e.target.checked)} />
+              Figure crests
+            </label>
+            <label className="check">
               <input
                 type="checkbox"
                 checked={settings.showLegalDots}

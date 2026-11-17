@@ -37,7 +37,10 @@ export interface Piece {
 /** Bottom = index 0, top = last. */
 export type Stack = Piece[]
 
-export type Phase = 'setup-doubles' | 'setup-mains' | 'play' | 'ended'
+export type Phase = 'setup-soldiers' | 'setup-doubles' | 'setup-mains' | 'play' | 'ended'
+
+/** `meta` is a real match. `zigzag` is the fixed soldier map used only for testing. */
+export type SetupVariant = 'meta' | 'zigzag'
 
 export type TimeControlId = '5+3' | '10+5'
 
@@ -65,6 +68,9 @@ export type GameResult = 'white' | 'black' | 'draw' | null
 
 export interface SetupSide {
   passed: boolean
+  soldiersConfirmed: boolean
+  /** 0-based rank per file. Length 10. `-1` until that file has a Soldat. */
+  soldierRanks: number[]
   doublesConfirmed: boolean
   /** File indices 0–9 marked as double soldiers. */
   doubleFiles: number[]
@@ -76,6 +82,7 @@ export interface GameState {
   board: (Stack | null)[][] // [file 0-9][rank 0-9]
   turn: Color
   phase: Phase
+  setupVariant: SetupVariant
   reserve: Record<Color, PieceType[]>
   setup: Record<Color, SetupSide>
   /** Squares "file,rank" that have an unused 3-stack shot. */
@@ -94,6 +101,8 @@ export interface GameState {
 }
 
 export type Action =
+  | { type: 'place-soldier'; color: Color; file: number; rank: number }
+  | { type: 'confirm-soldiers'; color: Color }
   | { type: 'confirm-doubles'; color: Color; files: number[] }
   | { type: 'toggle-double-file'; color: Color; file: number }
   | { type: 'place'; color: Color; piece: PieceType; file: number; rank: number }
@@ -128,7 +137,7 @@ export type Action =
       type: 'promote'
       choices: PieceType[]
     }
-  | { type: 'tick'; nowMs: number; side: Color }
+  | { type: 'tick'; nowMs: number; side: Color; elapsedMs?: number }
   | { type: 'new-game'; timeControl: TimeControlId }
 
 export type ApplyResult =

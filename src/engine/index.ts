@@ -4,13 +4,16 @@ export {
   applyAction,
   legalTargets,
   setupPlaceSquares,
+  soldierSetupSquares,
   TIME_CONTROLS,
 } from './game'
-export { algebraic, FILE_CHARS, soldierBaseRank, sqKey, top, isMainSetupRank } from './coords'
-export { generateMovesFrom, isKoenigInCheck, effectiveMover, carriedStack } from './moves'
+export { createZigzagSetup, normalizeGameState } from './state'
+export { algebraic, FILE_CHARS, soldierBaseRank, sqKey, top, isMainSetupRank, isSoldierSetupRank } from './coords'
+export { generateMovesFrom, isKoenigInCheck, effectiveMover, carriedStack, checkingThreats } from './moves'
+export type { CheckThreat } from './moves'
 export { hasMinimumArmy, countOnBoard } from './state'
 export { PIECE_LETTER, STANDARD_TYPES } from './types'
-export { stackBadge, pieceLetter } from './display'
+export { stackBadge } from './display'
 export {
   createMirroredQuickStart,
   createEmptyPlayState,

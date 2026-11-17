@@ -9,6 +9,7 @@ export interface AppSettings {
   boardDark: string
   accent: string
   showCoords: boolean
+  showCrests: boolean
   showLegalDots: boolean
   showPhaseBanners: boolean
   soundEnabled: boolean
@@ -26,6 +27,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   boardDark: '#7a756e',
   accent: '#39ff14',
   showCoords: true,
+  showCrests: true,
   showLegalDots: true,
   showPhaseBanners: true,
   soundEnabled: true,
@@ -82,6 +84,8 @@ export interface SavedComposition {
   side: Color
   /** 5 files for double soldaten */
   doubleFiles: number[]
+  /** 0-based Soldat rank per file. Missing on older saves, which use the zigzag map. */
+  soldierRanks?: number[]
   /** Main pieces to place: algebraic-ish file/rank + type */
   placements: { file: number; rank: number; type: PieceType }[]
   createdAt: number

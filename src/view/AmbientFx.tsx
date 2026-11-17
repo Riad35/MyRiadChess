@@ -12,7 +12,9 @@ export function AmbientFx({ kind, accent }: { kind: AmbientKind; accent: string 
     if (!ctx) return
     let frame = 0
     let raf = 0
-    let boltUntil = 0
+    let timer = 0
+    let nextBolt = 40 + Math.floor(Math.random() * 30)
+    const bolts: Bolt[] = []
 
     const tick = () => {
       frame += 1
@@ -23,42 +25,95 @@ export function AmbientFx({ kind, accent }: { kind: AmbientKind; accent: string 
         canvas.height = h
       }
       ctx.clearRect(0, 0, w, h)
-      if (kind === 'lightning') drawLightning(ctx, w, h, accent, frame, boltUntil)
+      let sleeping = false
+      if (kind === 'lightning') {
+        if (frame >= nextBolt) {
+          spawnBolts(bolts, w, h, frame)
+          nextBolt = frame + 220 + Math.floor(Math.random() * 80)
+        }
+        drawLightning(ctx, accent, frame, bolts)
+        if (bolts.length === 0) {
+          const wait = Math.max(1, nextBolt - frame)
+          timer = window.setTimeout(() => {
+            frame = nextBolt - 1
+            raf = requestAnimationFrame(tick)
+          }, wait * (1000 / 60))
+          sleeping = true
+        }
+      }
       if (kind === 'scan') drawScan(ctx, w, h, accent, frame)
       if (kind === 'sparks') drawSparks(ctx, w, h, accent, frame)
       if (kind === 'glitch') drawGlitch(ctx, w, h, accent, frame)
-      if (kind === 'lightning' && frame > boltUntil && frame % 110 === 0) boltUntil = frame + 7
-      raf = requestAnimationFrame(tick)
+      if (!sleeping) raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.clearTimeout(timer)
+    }
   }, [kind, accent])
 
   if (kind === 'off') return null
   return <canvas ref={ref} className="ambient-fx" aria-hidden />
 }
 
-function drawLightning(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  accent: string,
-  frame: number,
-  boltUntil: number,
-) {
-  if (frame > boltUntil) return
-  ctx.strokeStyle = frame % 2 === 0 ? '#f4f1ea' : accent
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  let x = w * 0.62
-  let y = 0
-  ctx.moveTo(x, y)
-  while (y < h * 0.72) {
-    x += ((frame * 17 + y) % 48) - 24
-    y += 28
-    ctx.lineTo(x, y)
+type Bolt = { pts: { x: number; y: number }[]; born: number }
+
+const STRIKE = 5
+const FADE = 9
+
+function spawnBolts(bolts: Bolt[], w: number, h: number, frame: number) {
+  const count = 2 + Math.floor(Math.random() * 2)
+  for (let n = 0; n < count; n++) {
+    const pts: Bolt['pts'] = []
+    let x = w * (0.18 + Math.random() * 0.64)
+    let y = 0
+    pts.push({ x, y })
+    const end = h * (0.62 + Math.random() * 0.28)
+    while (y < end) {
+      x += Math.random() * 90 - 45
+      y += 20 + Math.random() * 22
+      pts.push({ x, y })
+    }
+    bolts.push({ pts, born: frame })
   }
-  ctx.stroke()
+}
+
+function drawLightning(ctx: CanvasRenderingContext2D, accent: string, frame: number, bolts: Bolt[]) {
+  for (let i = bolts.length - 1; i >= 0; i--) {
+    const bolt = bolts[i]!
+    const age = frame - bolt.born
+    if (age >= STRIKE + FADE) {
+      bolts.splice(i, 1)
+      continue
+    }
+    traceBolt(ctx, bolt.pts)
+    if (age < STRIKE) {
+      ctx.globalAlpha = 0.45
+      ctx.strokeStyle = accent
+      ctx.lineWidth = 16
+      ctx.stroke()
+      ctx.globalAlpha = 1
+      ctx.strokeStyle = age % 2 === 0 ? '#f7f4ee' : accent
+      ctx.lineWidth = 8
+      ctx.stroke()
+    } else {
+      const left = 1 - (age - STRIKE) / FADE
+      ctx.globalAlpha = Math.max(0, left) * 0.75
+      ctx.strokeStyle = '#f4f1ea'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.globalAlpha = 1
+    }
+  }
+}
+
+function traceBolt(ctx: CanvasRenderingContext2D, pts: { x: number; y: number }[]) {
+  const first = pts[0]
+  if (!first) return
+  ctx.beginPath()
+  ctx.moveTo(first.x, first.y)
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]!.x, pts[i]!.y)
 }
 
 function drawScan(ctx: CanvasRenderingContext2D, w: number, h: number, accent: string, frame: number) {

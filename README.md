@@ -5,7 +5,7 @@ Local hot-seat web app for **Myriad Chess** (v3.1 playtest rules).
 ## Run
 
 ```bash
-cd chess2
+cd MyRiadChess
 npm install
 npm run dev
 ```
@@ -20,4 +20,4 @@ Open the URL Vite prints (usually `http://localhost:5173`).
 
 ## Rules source
 
-See `../Chess 2.txt` (v3.1 amendments locked with the app).
+See [RULES.md](RULES.md). `Chess 2.txt` is the older v3.1 source that book was consolidated from.

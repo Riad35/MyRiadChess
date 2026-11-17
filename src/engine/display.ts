@@ -1,4 +1,4 @@
-import type { Piece, PieceType, Stack } from './types'
+import type { Stack } from './types'
 import { PIECE_LETTER } from './types'
 import { effectiveMover } from './moves'
 
@@ -11,11 +11,9 @@ export function stackBadge(stack: Stack): { code: string; title: string; fused: 
     case 'double-drache':
       return { code: 'DrDr', title: 'Edler Drache', fused: true }
     case 'double-bishop':
-      return { code: 'BB', title: 'Pope', fused: true }
+      return { code: 'BB', title: 'Doppelbishop', fused: true }
     case 'double-turm':
       return { code: 'TT', title: 'Doppelturm', fused: true }
-    case 'double-dame':
-      return { code: 'DD', title: 'Doppeldame', fused: true }
     case 'bishop-turm':
       return { code: 'D', title: 'Dame', fused: true }
     case 'drache-ritter':
@@ -39,12 +37,4 @@ export function stackBadge(stack: Stack): { code: string; title: string; fused: 
     title: primary,
     fused: false,
   }
-}
-
-export function pieceLetter(type: PieceType): string {
-  return PIECE_LETTER[type]
-}
-
-export function topPiece(stack: Stack): Piece {
-  return stack[stack.length - 1]!
 }

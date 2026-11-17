@@ -1,58 +1,49 @@
-import type { Color, GameState, Piece, PieceType, Stack } from './types'
+import type { Color, GameState, PieceType, SetupSide, SetupVariant, Stack } from './types'
 import {
-  BLACK_SOLDIER_RANKS_1,
-  WHITE_SOLDIER_RANKS_1,
+  blankSoldierRanks,
   cloneBoard,
   emptyBoard,
   makePiece,
   setPieceIdCounter,
-  soldierBaseRank,
+  zigzagSoldierRanks,
 } from './coords'
 import { TIME_CONTROLS, type TimeControlId } from './types'
 
+function freshSetupSide(): SetupSide {
+  return {
+    passed: false,
+    soldiersConfirmed: false,
+    soldierRanks: blankSoldierRanks(),
+    doublesConfirmed: false,
+    doubleFiles: [],
+    pool: {
+      König: 1,
+      Dame: 1,
+      Turm: 2,
+      Bishop: 2,
+      Ritter: 2,
+      Drache: 2,
+    },
+  }
+}
+
+/** Real match: players place Soldaten. The zigzag map is not used. */
 export function createInitialState(timeControl: TimeControlId = '10+5'): GameState {
   setPieceIdCounter(1)
   const tc = TIME_CONTROLS[timeControl]
-  const board = emptyBoard()
-
-  placeBaseSoldiers(board, 'white')
-  placeBaseSoldiers(board, 'black')
 
   return {
-    board,
+    board: emptyBoard(),
     turn: 'white',
-    phase: 'setup-doubles',
+    phase: 'setup-soldiers',
+    setupVariant: 'meta',
     reserve: {
       white: ['Turm', 'Bishop', 'Ritter', 'Drache'],
       black: ['Turm', 'Bishop', 'Ritter', 'Drache'],
     },
     setup: {
-      white: {
-        passed: false,
-        doublesConfirmed: false,
-        doubleFiles: [],
-        pool: {
-          König: 1,
-          Dame: 1,
-          Turm: 2,
-          Bishop: 2,
-          Ritter: 2,
-          Drache: 2,
-        },
-      },
-      black: {
-        passed: false,
-        doublesConfirmed: false,
-        doubleFiles: [],
-        pool: {
-          König: 1,
-          Dame: 1,
-          Turm: 2,
-          Bishop: 2,
-          Ritter: 2,
-          Drache: 2,
-        },
-      },
+      white: freshSetupSide(),
+      black: freshSetupSide(),
     },
     shotReady: new Set(),
     clocksMs: { white: tc.initialMs, black: tc.initialMs },
@@ -63,21 +54,88 @@ export function createInitialState(timeControl: TimeControlId = '10+5'): GameSta
       {
         id: 1,
         level: 'system',
-        message: 'Setup: choose 5 double-Soldat files (White first). Base pawns are fixed.',
+        message: 'Setup: place one Soldat on each file (White first). Ranks 2–3 for White, 8–9 for Black. Not the back rank.',
         at: Date.now(),
       },
     ],
     positionHistory: [],
-    nextPieceId: 100,
+    nextPieceId: 1,
     pendingPromotion: null,
   }
 }
 
+/** Testing shortcut: 10 singles already on the zigzag, then the doubles phase. */
+export function createZigzagSetup(timeControl: TimeControlId = '10+5'): GameState {
+  const base = createInitialState(timeControl)
+  const board = emptyBoard()
+  placeBaseSoldiers(board, 'white')
+  placeBaseSoldiers(board, 'black')
+  return {
+    ...base,
+    board,
+    phase: 'setup-doubles',
+    setupVariant: 'zigzag',
+    turn: 'white',
+    setup: {
+      white: {
+        ...base.setup.white,
+        soldiersConfirmed: true,
+        soldierRanks: zigzagSoldierRanks('white'),
+      },
+      black: {
+        ...base.setup.black,
+        soldiersConfirmed: true,
+        soldierRanks: zigzagSoldierRanks('black'),
+      },
+    },
+    nextPieceId: 100,
+    log: [
+      {
+        id: 1,
+        level: 'system',
+        message: 'Testing: zigzag soldier map. Choose 5 double-Soldat files (White first).',
+        at: Date.now(),
+      },
+    ],
+  }
+}
+
 function placeBaseSoldiers(board: (Stack | null)[][], color: Color): void {
-  const ranks = color === 'white' ? WHITE_SOLDIER_RANKS_1 : BLACK_SOLDIER_RANKS_1
+  const ranks = zigzagSoldierRanks(color)
   for (let file = 0; file < 10; file++) {
-    const rank = ranks[file]! - 1
-    board[file]![rank] = [makePiece('Soldat', color)]
+    board[file]![ranks[file]!] = [makePiece('Soldat', color)]
+  }
+}
+
+/** Fill fields missing from an older saved session. */
+export function normalizeGameState(state: GameState): GameState {
+  const variant: SetupVariant =
+    state.setupVariant === 'meta' || state.setupVariant === 'zigzag'
+      ? state.setupVariant
+      : state.phase === 'setup-soldiers'
+        ? 'meta'
+        : 'zigzag'
+  return {
+    ...state,
+    setupVariant: variant,
+    setup: {
+      white: normalizeSide(state, 'white', variant),
+      black: normalizeSide(state, 'black', variant),
+    },
+  }
+}
+
+function normalizeSide(state: GameState, color: Color, variant: SetupVariant): SetupSide {
+  const side = state.setup[color]
+  const ranks =
+    side.soldierRanks?.length === 10 ? side.soldierRanks : variant === 'zigzag' ? zigzagSoldierRanks(color) : blankSoldierRanks()
+  return {
+    passed: side.passed,
+    soldiersConfirmed: side.soldiersConfirmed ?? state.phase !== 'setup-soldiers',
+    soldierRanks: ranks,
+    doublesConfirmed: side.doublesConfirmed,
+    doubleFiles: side.doubleFiles ?? [],
+    pool: side.pool,
   }
 }
 
@@ -86,7 +144,8 @@ export function applyDoublesToBoard(state: GameState, color: Color): GameState {
   const files = state.setup[color].doubleFiles
   let nextId = state.nextPieceId
   for (const file of files) {
-    const rank = soldierBaseRank(color, file)
+    const rank = state.setup[color].soldierRanks[file] ?? -1
+    if (rank < 0) continue
     const cell = board[file]![rank]
     if (!cell || cell.length !== 1 || cell[0]!.type !== 'Soldat') continue
     cell.push(makePiece('Soldat', color, nextId))
@@ -120,10 +179,6 @@ export function hasMinimumArmy(state: GameState, color: Color): boolean {
   return true
 }
 
-export function stackAt(state: GameState, file: number, rank: number): Stack | null {
-  return state.board[file]?.[rank] ?? null
-}
-
 export function findKoenig(state: GameState, color: Color): { file: number; rank: number } | null {
   for (let f = 0; f < 10; f++) {
     for (let r = 0; r < 10; r++) {
@@ -149,10 +204,3 @@ export function appendLog(
   }
 }
 
-export function piecesInStackTypes(stack: Stack): PieceType[] {
-  return stack.map((p) => p.type)
-}
-
-export function isRoyalTop(piece: Piece | undefined): boolean {
-  return piece?.type === 'König' || piece?.type === 'Dame'
-}

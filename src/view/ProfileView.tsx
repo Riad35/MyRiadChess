@@ -6,15 +6,14 @@ import type { FusionId } from './sprites'
 
 const BASE: PieceType[] = ['König', 'Dame', 'Turm', 'Bishop', 'Ritter', 'Drache', 'Soldat']
 
-const FUSIONS: { title: string; fusion?: FusionId; types: [PieceType, PieceType] }[] = [
-  { title: 'Doppelturm', fusion: 'double-turm', types: ['Turm', 'Turm'] },
-  { title: 'Dame', fusion: 'bishop-tower', types: ['Bishop', 'Turm'] },
-  { title: 'Edler Drache', fusion: 'elder-dragon', types: ['Drache', 'Drache'] },
-  { title: 'Edler Ritter', fusion: 'noble-knight', types: ['Ritter', 'Ritter'] },
-  { title: 'Drachenritter', types: ['Drache', 'Ritter'] },
-  { title: 'Soldat + Soldat', fusion: 'viking', types: ['Soldat', 'Soldat'] },
-  { title: 'Pope', fusion: 'pope', types: ['Bishop', 'Bishop'] },
-  { title: 'Dame + Dame', types: ['Dame', 'Dame'] },
+const FUSIONS: { title: string; fusion?: FusionId; draw?: PieceType; types: [PieceType, PieceType] }[] = [
+  { title: 'Doppelturm', fusion: 'doppelturm', types: ['Turm', 'Turm'] },
+  { title: 'Dame', draw: 'Dame', types: ['Bishop', 'Turm'] },
+  { title: 'Edler Drache', fusion: 'edler-drache', types: ['Drache', 'Drache'] },
+  { title: 'Edler Ritter', fusion: 'edler-ritter', types: ['Ritter', 'Ritter'] },
+  { title: 'Drachenritter', fusion: 'drachenritter', types: ['Drache', 'Ritter'] },
+  { title: 'Doppelsoldat', fusion: 'doppelsoldat', types: ['Soldat', 'Soldat'] },
+  { title: 'Doppelbishop', fusion: 'doppelbishop', types: ['Bishop', 'Bishop'] },
 ]
 
 export function ProfileView({
@@ -58,7 +57,7 @@ export function ProfileView({
         <div className="profile-row">
           {BASE.map((type) => (
             <div key={type} className="profile-piece">
-              <PieceIcon type={type} color="white" />
+              <PieceIcon type={type} color="white" skinId={settings.skinId} />
               <span>{type}</span>
             </div>
           ))}
@@ -68,12 +67,9 @@ export function ProfileView({
           {FUSIONS.map((fusion) => (
             <div key={fusion.title} className="profile-piece">
               {fusion.fusion ? (
-                <PieceIcon type={fusion.types[0]} fusion={fusion.fusion} color="white" />
+                <PieceIcon type={fusion.types[0]} fusion={fusion.fusion} color="white" skinId={settings.skinId} />
               ) : (
-                <span className="fusion-pair">
-                  <PieceIcon type={fusion.types[0]} color="white" />
-                  <PieceIcon type={fusion.types[1]} color="white" />
-                </span>
+                <PieceIcon type={fusion.draw!} color="white" skinId={settings.skinId} />
               )}
               <span>{fusion.title}</span>
             </div>

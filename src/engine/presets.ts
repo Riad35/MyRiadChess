@@ -1,14 +1,14 @@
 import type { Color, GameState, PieceType, Stack, TimeControlId } from './types'
 import { TIME_CONTROLS } from './types'
 import {
+  blankSoldierRanks,
   cloneBoard,
   emptyBoard,
   makePiece,
   setPieceIdCounter,
-  soldierBaseRank,
+  zigzagSoldierRanks,
 } from './coords'
 import { createInitialState, appendLog } from './state'
-import { WHITE_SOLDIER_RANKS_1, BLACK_SOLDIER_RANKS_1 } from './coords'
 
 function emptyPools() {
   return {
@@ -40,8 +40,8 @@ export function createMirroredQuickStart(timeControl: TimeControlId = '10+5'): G
   // Soldiers: all 10 files single + doubles on 0,2,4,5,7 (5 doubles) both sides
   const doubleFiles = [0, 2, 4, 5, 7]
   for (let file = 0; file < 10; file++) {
-    const wr = WHITE_SOLDIER_RANKS_1[file]! - 1
-    const br = BLACK_SOLDIER_RANKS_1[file]! - 1
+    const wr = zigzagSoldierRanks('white')[file]!
+    const br = zigzagSoldierRanks('black')[file]!
     const wStack: PieceType[] = doubleFiles.includes(file) ? ['Soldat', 'Soldat'] : ['Soldat']
     const bStack: PieceType[] = doubleFiles.includes(file) ? ['Soldat', 'Soldat'] : ['Soldat']
     put(board, file, wr, wStack, 'white', id)
@@ -69,12 +69,16 @@ export function createMirroredQuickStart(timeControl: TimeControlId = '10+5'): G
     setup: {
       white: {
         passed: true,
+        soldiersConfirmed: true,
+        soldierRanks: zigzagSoldierRanks('white'),
         doublesConfirmed: true,
         doubleFiles,
         pool: emptyPools(),
       },
       black: {
         passed: true,
+        soldiersConfirmed: true,
+        soldierRanks: zigzagSoldierRanks('black'),
         doublesConfirmed: true,
         doubleFiles,
         pool: emptyPools(),
@@ -105,8 +109,22 @@ export function createEmptyPlayState(timeControl: TimeControlId = '10+5'): GameS
     turn: 'white',
     reserve: { white: [], black: [] },
     setup: {
-      white: { passed: true, doublesConfirmed: true, doubleFiles: [], pool: emptyPools() },
-      black: { passed: true, doublesConfirmed: true, doubleFiles: [], pool: emptyPools() },
+      white: {
+        passed: true,
+        soldiersConfirmed: true,
+        soldierRanks: blankSoldierRanks(),
+        doublesConfirmed: true,
+        doubleFiles: [],
+        pool: emptyPools(),
+      },
+      black: {
+        passed: true,
+        soldiersConfirmed: true,
+        soldierRanks: blankSoldierRanks(),
+        doublesConfirmed: true,
+        doubleFiles: [],
+        pool: emptyPools(),
+      },
     },
     shotReady: new Set(),
     clocksMs: { white: tc.initialMs, black: tc.initialMs },
@@ -175,42 +193,73 @@ export function buildScenarioBoard(
   return s
 }
 
+function validRanks(ranks: number[] | undefined): ranks is number[] {
+  return !!ranks && ranks.length === 10 && ranks.every((r) => r >= 0 && r < 10)
+}
+
 /** Apply a saved composition onto setup for that side (from doubles onward). */
 export function applyCompositionToSetup(
   state: GameState,
   side: Color,
   doubleFiles: number[],
   placements: { file: number; rank: number; type: PieceType }[],
+  soldierRanks?: number[],
 ): GameState {
-  // Rebuild from initial, confirm doubles for both, place composition pieces for side
+  // Rebuild from initial, confirm doubles for both, place composition pieces for side.
+  // Saves without soldier ranks keep the zigzag map.
   const tc = state.timeControl.id
   let next = createInitialState(tc)
   const other: Color = side === 'white' ? 'black' : 'white'
   const otherDoubles =
     state.setup[other].doubleFiles.length === 5 ? state.setup[other].doubleFiles : [1, 3, 4, 6, 8]
-  // apply doubles via board mutation helper from state
-  next = {
-    ...next,
-    setup: {
-      ...next.setup,
-      [side]: { ...next.setup[side], doubleFiles, doublesConfirmed: true },
-      [other]: { ...next.setup[other], doubleFiles: otherDoubles, doublesConfirmed: true },
-    },
-  }
-  // Apply soldier doubles on board
-  const board = cloneBoard(next.board)
-  let nid = next.nextPieceId
+  const useSavedRanks = validRanks(soldierRanks)
+  const sideRanks = useSavedRanks ? soldierRanks : zigzagSoldierRanks(side)
+  const otherRanks =
+    useSavedRanks && validRanks(state.setup[other].soldierRanks)
+      ? state.setup[other].soldierRanks
+      : zigzagSoldierRanks(other)
+
+  const board = emptyBoard()
+  let nid = 1
   for (const color of [side, other] as Color[]) {
-    const files = color === side ? doubleFiles : otherDoubles
-    for (const file of files) {
-      const rank = soldierBaseRank(color, file)
-      const cell = board[file]![rank]
-      if (cell && cell.length === 1) {
-        cell.push(makePiece('Soldat', color, nid++))
-      }
+    const ranks = color === side ? sideRanks : otherRanks
+    for (let file = 0; file < 10; file++) {
+      board[file]![ranks[file]!] = [makePiece('Soldat', color, nid++)]
     }
   }
-  next = { ...next, board, nextPieceId: nid, phase: 'setup-mains', turn: side }
+  for (const color of [side, other] as Color[]) {
+    const files = color === side ? doubleFiles : otherDoubles
+    const ranks = color === side ? sideRanks : otherRanks
+    for (const file of files) {
+      const cell = board[file]![ranks[file]!]
+      if (cell && cell.length === 1) cell.push(makePiece('Soldat', color, nid++))
+    }
+  }
+  next = {
+    ...next,
+    board,
+    nextPieceId: nid,
+    phase: 'setup-mains',
+    turn: side,
+    setupVariant: useSavedRanks ? 'meta' : 'zigzag',
+    setup: {
+      ...next.setup,
+      [side]: {
+        ...next.setup[side],
+        soldiersConfirmed: true,
+        soldierRanks: [...sideRanks],
+        doubleFiles,
+        doublesConfirmed: true,
+      },
+      [other]: {
+        ...next.setup[other],
+        soldiersConfirmed: true,
+        soldierRanks: [...otherRanks],
+        doubleFiles: otherDoubles,
+        doublesConfirmed: true,
+      },
+    },
+  }
 
   for (const pl of placements) {
     if (board[pl.file]![pl.rank]) continue

@@ -1,20 +1,23 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
-import type { Color, GameState, PieceType } from '../engine'
-import { carriedStack, soldierBaseRank, stackBadge } from '../engine'
+import type { CheckThreat, Color, GameState, PieceType } from '../engine'
+import { carriedStack } from '../engine'
 import {
   FACINGS,
   facingFrames,
   facingIndex,
+  fusionSheet,
   hoverSilhouette,
   loadSpriteLibrary,
+  pieceSheet,
   stackBodies,
   type FusionId,
   type SpriteLibrary,
 } from './sprites'
+import { crestTexture } from './crests'
 
 type Target = { file: number; rank: number; kind: string; mode?: string }
 
@@ -30,7 +33,9 @@ type BoardProps = {
   doubleFiles: number[]
   chooser: Color
   checkSquare: { file: number; rank: number } | null
+  threats: CheckThreat[]
   showCoords: boolean
+  showCrests: boolean
   light: string
   dark: string
   accent: string
@@ -41,11 +46,44 @@ type BoardProps = {
   dragging: { file: number; rank: number } | null
   onHoverSquare: (square: { file: number; rank: number } | null) => void
   onDragStart: (file: number, rank: number) => void
-  onDragEnd: (square: { file: number; rank: number } | null) => void
+  onDragEnd: (square: { file: number; rank: number } | null) => boolean
   onSquareClick: (file: number, rank: number) => void
+  skinId: string
 }
 
-export function Board3D(props: BoardProps) {
+function sameBoard(a: BoardProps, b: BoardProps): boolean {
+  return (
+    a.state.board === b.state.board &&
+    a.state.phase === b.state.phase &&
+    a.state.turn === b.state.turn &&
+    a.state.reserve === b.state.reserve &&
+    a.state.setup === b.state.setup &&
+    a.selected === b.selected &&
+    a.targetMap === b.targetMap &&
+    a.setupSquares === b.setupSquares &&
+    a.doubleFiles === b.doubleFiles &&
+    a.chooser === b.chooser &&
+    a.checkSquare === b.checkSquare &&
+    a.threats === b.threats &&
+    a.showCoords === b.showCoords &&
+    a.showCrests === b.showCrests &&
+    a.light === b.light &&
+    a.dark === b.dark &&
+    a.accent === b.accent &&
+    a.movable === b.movable &&
+    a.motion === b.motion &&
+    a.motionRate === b.motionRate &&
+    a.preview === b.preview &&
+    a.dragging === b.dragging &&
+    a.onHoverSquare === b.onHoverSquare &&
+    a.onDragStart === b.onDragStart &&
+    a.onDragEnd === b.onDragEnd &&
+    a.onSquareClick === b.onSquareClick &&
+    a.skinId === b.skinId
+  )
+}
+
+export const Board3D = memo(function Board3D(props: BoardProps) {
   const controls = useRef<OrbitControlsImpl>(null)
   return (
     <div className="board-stage">
@@ -79,7 +117,7 @@ export function Board3D(props: BoardProps) {
       </Canvas>
     </div>
   )
-}
+}, sameBoard)
 
 function DragSession({
   armed,
@@ -142,26 +180,71 @@ function HoverLeave({ onHoverSquare }: { onHoverSquare: (square: null) => void }
   return null
 }
 
+type Glide = {
+  file: number
+  rank: number
+  stack: NonNullable<GameState['board'][number][number]>
+  x: number
+  z: number
+  t0: number
+}
+
 function Scene(props: BoardProps) {
   const [lib, setLib] = useState<SpriteLibrary | null>(null)
+  const [glide, setGlide] = useState<Glide | null>(null)
   const armed = useRef<{ x: number; y: number; file: number; rank: number; started: boolean } | null>(null)
   const hoverRef = useRef<{ file: number; rank: number } | null>(null)
+  const grip = useRef({ x: 0, z: 0 })
+  const glideDone = useRef(false)
   const onHover = (square: { file: number; rank: number } | null) => {
     hoverRef.current = square
     props.onHoverSquare(square)
   }
   const armDrag = (file: number, rank: number, x: number, y: number) => {
     armed.current = { x, y, file, rank, started: false }
+    grip.current = { x: file - 4.5, z: rank - 4.5 }
+    setGlide(null)
+  }
+  const finishDrag = (square: { file: number; rank: number } | null) => {
+    const from = props.dragging
+    const stack = from ? props.state.board[from.file]?.[from.rank] : null
+    const carry = stack ? carriedStack(stack) : null
+    const taken = props.onDragEnd(square)
+    if (!taken && from && carry) {
+      glideDone.current = false
+      setGlide({ file: from.file, rank: from.rank, stack: carry, x: grip.current.x, z: grip.current.z, t0: performance.now() })
+      return
+    }
+    setGlide(null)
+  }
+  const endGlide = () => {
+    if (glideDone.current) return
+    glideDone.current = true
+    setGlide(null)
   }
   useEffect(() => {
     let live = true
-    loadSpriteLibrary().then((next) => {
+    loadSpriteLibrary(props.skinId).then((next) => {
       if (live) setLib(next)
     })
     return () => {
       live = false
     }
-  }, [])
+  }, [props.skinId])
+
+  const threatKey = props.threats
+    .map((threat) => `${threat.kind}:${threat.squares.map((sq) => `${sq.file},${sq.rank}`).join(';')}`)
+    .join('|')
+  const levels = pulseLevels(props.threats, 0)
+  const pulseMats = useRef(new Map<string, THREE.MeshBasicMaterial>())
+  const threatSquares = useMemo(() => {
+    const set = new Set<string>()
+    for (const threat of props.threats) {
+      for (const sq of threat.squares) set.add(`${sq.file},${sq.rank}`)
+    }
+    return set
+  }, [props.threats])
+  const leapOnly = props.threats.some((t) => t.kind === 'leap') && !props.threats.some((t) => t.kind === 'ray')
 
   const heldStack =
     props.dragging && props.state.board[props.dragging.file]?.[props.dragging.rank]
@@ -170,16 +253,37 @@ function Scene(props: BoardProps) {
   const heldCarry = heldStack ? carriedStack(heldStack) : null
   return (
     <>
-      <DragSession armed={armed} hoverRef={hoverRef} onDragStart={props.onDragStart} onDragEnd={props.onDragEnd} />
+      <DragSession armed={armed} hoverRef={hoverRef} onDragStart={props.onDragStart} onDragEnd={finishDrag} />
+      {lib && <ReserveFloaters lib={lib} reserve={props.state.reserve} />}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}>
         <planeGeometry args={[11.2, 11.2]} />
         <meshBasicMaterial color="#111111" toneMapped={false} />
       </mesh>
       <PixelBoard light={props.light} dark={props.dark} />
+      {threatKey && (
+        <PulseDriver
+          threats={props.threats}
+          threatKey={threatKey}
+          mats={pulseMats}
+          accent={props.accent}
+          light={props.light}
+          dark={props.dark}
+        />
+      )}
       {Array.from({ length: 10 }, (_, file) =>
         Array.from({ length: 10 }, (_, rank) => {
           const key = `${file},${rank}`
           const target = props.targetMap.get(key)
+          const soldierRank = props.state.setup[props.chooser].soldierRanks[file]
+          const doubleMark =
+            props.state.phase === 'setup-doubles' && rank === soldierRank && props.doubleFiles.includes(file)
+          const dark = (file + rank) % 2 === 1
+          const base = dark ? props.dark : props.light
+          const selected = props.selected?.file === file && props.selected.rank === rank
+          const placeable = props.setupSquares.has(key)
+          const pulse = levels.get(key)
+          const leapKing = leapOnly && props.checkSquare?.file === file && props.checkSquare.rank === rank
+          const pulseId = threatSquares.has(key) && !selected && !target?.kind && !placeable ? key : undefined
           return (
             <Tile
               key={key}
@@ -187,31 +291,28 @@ function Scene(props: BoardProps) {
               rank={rank}
               targetMap={props.targetMap}
               marked={tileMarked({
-                selected: props.selected?.file === file && props.selected.rank === rank,
+                selected,
                 kind: target?.kind,
-                placeable: props.setupSquares.has(key),
-                doubleMark:
-                  props.state.phase === 'setup-doubles' &&
-                  rank === soldierBaseRank(props.chooser, file) &&
-                  props.doubleFiles.includes(file),
-                check: props.checkSquare?.file === file && props.checkSquare.rank === rank,
+                placeable,
+                doubleMark,
+                pulse,
+                leapKing,
               })}
               color={tileColor({
-                dark: (file + rank) % 2 === 1,
-                light: props.light,
-                darkColor: props.dark,
+                base,
+                dark,
                 accent: props.accent,
-                selected: props.selected?.file === file && props.selected.rank === rank,
+                selected,
                 kind: target?.kind,
-                placeable: props.setupSquares.has(key),
-                doubleMark:
-                  props.state.phase === 'setup-doubles' &&
-                  rank === soldierBaseRank(props.chooser, file) &&
-                  props.doubleFiles.includes(file),
-                check: props.checkSquare?.file === file && props.checkSquare.rank === rank,
+                placeable,
+                doubleMark,
+                pulse,
+                leapKing,
               })}
               onSquareClick={props.onSquareClick}
               onHoverSquare={onHover}
+              pulseId={pulseId}
+              pulseMats={pulseMats}
             />
           )
         }),
@@ -232,10 +333,15 @@ function Scene(props: BoardProps) {
                     motion={props.motion}
                     motionRate={props.motionRate}
                     accent={props.accent}
+                    skinId={props.skinId}
                     canMove={props.movable.has(`${file},${rank}`)}
                     onHoverSquare={onHover}
                     onArmDrag={armDrag}
-                    held={props.dragging?.file === file && props.dragging.rank === rank}
+                    showCrests={props.showCrests}
+                    held={
+                      (props.dragging?.file === file && props.dragging.rank === rank) ||
+                      (glide?.file === file && glide.rank === rank)
+                    }
                   />,
                 ]
               : [],
@@ -253,8 +359,10 @@ function Scene(props: BoardProps) {
           motion="none"
           motionRate={0}
           accent={props.accent}
+          skinId={props.skinId}
           canMove={false}
           ghost
+          showCrests={props.showCrests}
         />
       )}
       {lib && heldCarry && props.dragging && (
@@ -269,8 +377,30 @@ function Scene(props: BoardProps) {
           motion="none"
           motionRate={0}
           accent={props.accent}
+          skinId={props.skinId}
           canMove={false}
           followPointer
+          grip={grip}
+          showCrests={props.showCrests}
+        />
+      )}
+      {lib && glide && !props.dragging && (
+        <StackView
+          key={`glide-${glide.file}-${glide.rank}-${glide.t0}`}
+          stack={glide.stack}
+          file={glide.file}
+          rank={glide.rank}
+          lib={lib}
+          targetMap={props.targetMap}
+          onClick={props.onSquareClick}
+          motion="none"
+          motionRate={0}
+          accent={props.accent}
+          skinId={props.skinId}
+          canMove={false}
+          glide={glide}
+          onGlideDone={endGlide}
+          showCrests={props.showCrests}
         />
       )}
       {props.showCoords && <Coords />}
@@ -284,35 +414,34 @@ const PIECE_SIZE = 1
 /** Fraction of the canvas below the opaque feet, so the figure can sit on the square. */
 const FOOT_PAD: Record<string, number> = {
   bishop: 0.146,
-  'bishop-tower': 0.125,
   dame: 0.177,
-  drache: 0.167,
-  'double-turm': 0.125,
-  'elder-dragon': 0.073,
+  drache: 0.073,
+  doppelturm: 0.125,
+  'edler-drache': 0.063,
   koenig: 0.073,
-  'noble-knight': 0.094,
-  pope: 0.073,
-  ritter: 0.115,
+  'edler-ritter': 0.063,
+  doppelbishop: 0.073,
+  ritter: 0.094,
   soldat: 0.208,
   turm: 0.094,
-  viking: 0.125,
-}
-
-const SPRITE_KEY: Record<PieceType, string> = {
-  König: 'koenig',
-  Dame: 'dame',
-  Turm: 'turm',
-  Bishop: 'bishop',
-  Ritter: 'ritter',
-  Drache: 'drache',
-  Soldat: 'soldat',
+  doppelsoldat: 0.125,
+  drachenritter: 0.063,
+  'skins/chessmen/bishop': 0.135,
+  'skins/chessmen/dame': 0.188,
+  'skins/chessmen/ritter': 0.094,
+  'skins/chessmen/soldat': 0.125,
+  'skins/chessmen/doppelsoldat': 0.125,
+  'skins/chessmen/doppelturm': 0.125,
+  'skins/chessmen/doppelbishop': 0.021,
 }
 
 /** One card per square. `seat` is how far the feet sit below the card center. */
-function pieceStand(type: PieceType, fusion?: FusionId) {
-  const key = fusion === 'bishop-tower' ? 'dame' : (fusion ?? SPRITE_KEY[type])
-  const pad = FOOT_PAD[key] ?? 0.12
-  return { size: PIECE_SIZE, seat: PIECE_SIZE * (0.5 - pad) }
+function pieceStand(type: PieceType, skinId: string, fusion?: FusionId, footPad?: number) {
+  const key = fusion ? fusionSheet(skinId, fusion) : pieceSheet(skinId, type)
+  const pad = footPad ?? FOOT_PAD[key] ?? 0.12
+  const soldier = (!fusion && type === 'Soldat') || fusion === 'doppelsoldat'
+  const size = type === 'Dame' && !fusion ? PIECE_SIZE * 1.12 : soldier ? PIECE_SIZE * 0.78 : PIECE_SIZE
+  return { size, seat: size * (0.5 - pad) }
 }
 
 /**
@@ -341,29 +470,57 @@ function tileMarked(opts: {
   kind?: string
   placeable: boolean
   doubleMark: boolean
-  check: boolean
+  pulse?: number
+  leapKing: boolean
 }) {
-  return opts.check || opts.selected || !!opts.kind || opts.placeable || opts.doubleMark
+  return opts.pulse != null || opts.leapKing || opts.selected || !!opts.kind || opts.placeable || opts.doubleMark
 }
 
 function tileColor(opts: {
+  base: string
   dark: boolean
-  light: string
-  darkColor: string
   accent: string
   selected: boolean
   kind?: string
   placeable: boolean
   doubleMark: boolean
-  check: boolean
+  pulse?: number
+  leapKing: boolean
 }) {
-  if (opts.check) return '#ffffff'
   if (opts.selected) return opts.accent
   if (opts.kind === 'capture' || opts.kind === 'split') return '#2e2e2e'
   if (opts.kind) return mixWhite(opts.accent, 0.5)
   if (opts.placeable) return mixWhite(opts.accent, 0.35)
+  if (opts.pulse === 0 || opts.leapKing) return opts.accent
+  if (opts.pulse === 1) return mixToward(opts.accent, opts.base, 0.5)
+  if (opts.pulse === 2) return mixToward(opts.accent, opts.base, 0.82)
   if (opts.doubleMark) return opts.dark ? '#5e5b57' : '#d5d0c6'
-  return opts.dark ? opts.darkColor : opts.light
+  return opts.base
+}
+
+/** 0 = full accent, then two dimmer steps. Brighter (lower) wins when trails overlap. */
+function pulseLevels(threats: CheckThreat[], tick: number) {
+  const levels = new Map<string, number>()
+  const put = (file: number, rank: number, level: number) => {
+    const key = `${file},${rank}`
+    const prev = levels.get(key)
+    if (prev == null || level < prev) levels.set(key, level)
+  }
+  for (const threat of threats) {
+    if (threat.kind === 'leap') {
+      const sq = threat.squares[0]
+      if (sq && tick % 2 === 0) put(sq.file, sq.rank, 0)
+      continue
+    }
+    const n = threat.squares.length
+    if (n === 0) continue
+    const t = tick % (n + 3)
+    threat.squares.forEach((sq, i) => {
+      const age = t - i
+      if (age >= 0 && age <= 2) put(sq.file, sq.rank, age)
+    })
+  }
+  return levels
 }
 
 function chooseSquare(
@@ -382,6 +539,53 @@ function chooseSquare(
   return { file: data.file, rank: data.rank }
 }
 
+function PulseDriver({
+  threats,
+  threatKey,
+  mats,
+  accent,
+  light,
+  dark,
+}: {
+  threats: CheckThreat[]
+  threatKey: string
+  mats: { current: Map<string, THREE.MeshBasicMaterial> }
+  accent: string
+  light: string
+  dark: string
+}) {
+  const start = useRef(performance.now())
+  const threatsRef = useRef(threats)
+  threatsRef.current = threats
+  const colors = useRef({ accent, light, dark })
+  colors.current = { accent, light, dark }
+  useEffect(() => {
+    start.current = performance.now()
+  }, [threatKey])
+  useFrame(() => {
+    const tick = Math.floor((performance.now() - start.current) / 180)
+    const levels = pulseLevels(threatsRef.current, tick)
+    const paint = colors.current
+    for (const [id, mat] of mats.current) {
+      const comma = id.indexOf(',')
+      const file = Number(id.slice(0, comma))
+      const rank = Number(id.slice(comma + 1))
+      const level = levels.get(id)
+      const base = (file + rank) % 2 === 1 ? paint.dark : paint.light
+      if (level == null) {
+        mat.color.set(base)
+        mat.opacity = 0
+        mat.transparent = true
+      } else {
+        mat.color.set(level === 0 ? paint.accent : mixToward(paint.accent, base, level === 1 ? 0.5 : 0.82))
+        mat.opacity = 0.92
+        mat.transparent = false
+      }
+    }
+  })
+  return null
+}
+
 function Tile({
   file,
   rank,
@@ -390,6 +594,8 @@ function Tile({
   onSquareClick,
   onHoverSquare,
   targetMap,
+  pulseId,
+  pulseMats,
 }: {
   file: number
   rank: number
@@ -398,7 +604,18 @@ function Tile({
   onSquareClick: (file: number, rank: number) => void
   onHoverSquare: (square: { file: number; rank: number }) => void
   targetMap: Map<string, Target>
+  pulseId?: string
+  pulseMats: { current: Map<string, THREE.MeshBasicMaterial> }
 }) {
+  const mat = useRef<THREE.MeshBasicMaterial>(null)
+  useLayoutEffect(() => {
+    const material = mat.current
+    if (!pulseId || !material) return
+    pulseMats.current.set(pulseId, material)
+    return () => {
+      pulseMats.current.delete(pulseId)
+    }
+  }, [pulseId, pulseMats])
   return (
     <mesh
       userData={{ file, rank, kind: 'tile' }}
@@ -424,6 +641,7 @@ function Tile({
     >
       <planeGeometry args={[0.96, 0.96]} />
       <meshBasicMaterial
+        ref={mat}
         color={color}
         transparent={!marked}
         opacity={marked ? 0.92 : 0}
@@ -444,12 +662,17 @@ function StackView({
   motion,
   motionRate,
   accent,
+  skinId,
   canMove,
   onHoverSquare,
   onArmDrag,
   ghost = false,
   held = false,
   followPointer = false,
+  grip,
+  glide,
+  onGlideDone,
+  showCrests = false,
 }: {
   stack: NonNullable<GameState['board'][number][number]>
   file: number
@@ -460,12 +683,17 @@ function StackView({
   motion: Motion
   motionRate: number
   accent: string
+  skinId: string
   canMove: boolean
   onHoverSquare?: (square: { file: number; rank: number }) => void
   onArmDrag?: (file: number, rank: number, x: number, y: number) => void
   ghost?: boolean
   held?: boolean
   followPointer?: boolean
+  grip?: { current: { x: number; z: number } }
+  glide?: Glide
+  onGlideDone?: () => void
+  showCrests?: boolean
 }) {
   const departs = carriedStack(stack).length
   const bodies = stackBodies(stack)
@@ -473,25 +701,10 @@ function StackView({
   if (shown.length === 0) return null
   let lift = 0
   const spots = shown.flatMap((body) => {
-    const paired = !body.fusion && !body.asType && body.pieces.length === 2
-    if (paired) {
-      const seats = body.pieces.map((piece) => pieceStand(piece.type))
-      const foot = lift
-      lift += Math.max(...seats.map((seat) => seat.seat)) * 1.15
-      return body.pieces.map((piece, i) => ({
-        key: piece.id,
-        type: piece.type,
-        fusion: undefined as FusionId | undefined,
-        color: piece.color,
-        x: i === 0 ? -0.16 : 0.16,
-        foot,
-        size: seats[i]!.size,
-        seat: seats[i]!.seat,
-      }))
-    }
     const head = body.pieces[body.pieces.length - 1]!
     const type = body.asType ?? head.type
-    const stand = pieceStand(type, body.fusion ?? undefined)
+    const pad = facingFrames(lib, type, head.color, body.fusion).south.footPad
+    const stand = pieceStand(type, skinId, body.fusion ?? undefined, pad)
     const foot = lift
     lift += stand.seat * 1.15
     return [
@@ -507,7 +720,6 @@ function StackView({
       },
     ]
   })
-  const lone = shown.length === 1 ? shown[0] : null
   return (
     <group>
       {spots.map((spot) => (
@@ -532,11 +744,12 @@ function StackView({
           onArmDrag={onArmDrag}
           ghost={ghost}
           followPointer={followPointer}
+          grip={grip}
+          glide={glide}
+          onGlideDone={onGlideDone}
+          showCrests={showCrests}
         />
       ))}
-      {lone && !lone.fusion && !lone.asType && lone.pieces.length === 2 && !ghost && (
-        <Label text={stackBadge(lone.pieces).title} position={[file - 4.5, 0.2, rank - 4.5 - 0.9]} wide />
-      )}
     </group>
   )
 }
@@ -562,6 +775,10 @@ function PieceMesh({
   ghost = false,
   held = false,
   followPointer = false,
+  grip,
+  glide,
+  onGlideDone,
+  showCrests = false,
 }: {
   type: PieceType
   fusion?: FusionId
@@ -583,6 +800,10 @@ function PieceMesh({
   ghost?: boolean
   held?: boolean
   followPointer?: boolean
+  grip?: { current: { x: number; z: number } }
+  glide?: Glide
+  onGlideDone?: () => void
+  showCrests?: boolean
 }) {
   const ref = useRef<THREE.Mesh>(null)
   const hot = useRef(false)
@@ -590,18 +811,59 @@ function PieceMesh({
   const frames = facingFrames(lib, type, color, fusion)
   const dragPlane = useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.2))
   const dragHit = useRef(new THREE.Vector3())
+  const idle = useRef({
+    ready: false,
+    hot: false,
+    held: false,
+    px: 0,
+    py: 0,
+    pz: 0,
+    x: 0,
+    y: 0,
+    z: 0,
+    qx: 0,
+    qy: 0,
+    qz: 0,
+    qw: 0,
+  })
+  const floating = ghost || followPointer || held || !!glide
   useLayoutEffect(() => {
     const mesh = ref.current
-    if (mesh && (ghost || followPointer || held)) mesh.raycast = () => null
-  }, [ghost, followPointer, held])
+    if (!mesh) return
+    mesh.raycast = floating ? () => null : THREE.Mesh.prototype.raycast
+  }, [floating])
   useFrame(({ camera, clock, raycaster, pointer }) => {
     const mesh = ref.current
     if (!mesh) return
-    if (ghost || followPointer || held) mesh.raycast = () => null
+    const calm = !followPointer && !glide && motion === 'none'
+    if (calm) {
+      const place = camera.position
+      const turn = camera.quaternion
+      const stamp = idle.current
+      if (
+        stamp.ready &&
+        stamp.hot === hot.current &&
+        stamp.held === held &&
+        stamp.px === position[0] &&
+        stamp.py === position[1] &&
+        stamp.pz === position[2] &&
+        stamp.x === place.x &&
+        stamp.y === place.y &&
+        stamp.z === place.z &&
+        stamp.qx === turn.x &&
+        stamp.qy === turn.y &&
+        stamp.qz === turn.z &&
+        stamp.qw === turn.w
+      ) {
+        return
+      }
+    }
+    mesh.raycast = floating ? () => null : THREE.Mesh.prototype.raycast
     mesh.visible = !held
     let placeX = position[0]
     let placeY = position[1]
     let placeZ = position[2]
+    let lift = ghost || followPointer ? 0.08 : 0
     if (followPointer) {
       raycaster.setFromCamera(pointer, camera)
       if (raycaster.ray.intersectPlane(dragPlane.current, dragHit.current)) {
@@ -609,15 +871,27 @@ function PieceMesh({
         placeZ = dragHit.current.z + (position[2] - (rank - 4.5))
         placeY = position[1]
       }
+      if (grip) grip.current = { x: placeX, z: placeZ }
+      placeX += Math.sin(clock.elapsedTime * 28) * 0.05
+      placeZ += Math.cos(clock.elapsedTime * 23) * 0.04
+    }
+    if (glide) {
+      const u = Math.min(1, (performance.now() - glide.t0) / 180)
+      const ease = 1 - (1 - u) * (1 - u)
+      placeX = glide.x + (position[0] - glide.x) * ease
+      placeZ = glide.z + (position[2] - glide.z) * ease
+      lift = 0.08 * (1 - ease)
+      if (u >= 1) onGlideDone?.()
     }
     const side = boardYaw(camera)
     const pitch = viewPitch(camera, placeX, placeY + seat, placeZ)
     applyPose(mesh, side, pitch)
-    const bob = ghost || followPointer || motion === 'none' || motionRate === 0 ? 0 : Math.sin(clock.elapsedTime * motionRate + file + rank) * 0.07
+    if (followPointer) mesh.rotation.z = Math.sin(clock.elapsedTime * 18) * 0.14
+    const bob = ghost || followPointer || glide || motion === 'none' || motionRate === 0 ? 0 : Math.sin(clock.elapsedTime * motionRate + file + rank) * 0.07
     // Center stays on the square. The lean only slides the feet within that square.
     mesh.position.set(
       placeX + (motion === 'slide' ? bob : 0),
-      placeY + (ghost || followPointer ? 0.08 : 0) + 0.02 + Math.cos(pitch) * seat + (motion === 'hop' ? Math.abs(bob) : 0),
+      placeY + lift + 0.02 + Math.cos(pitch) * seat + (motion === 'hop' ? Math.abs(bob) : 0),
       placeZ,
     )
     const index = facingIndex(yaw, Math.sin(side), Math.cos(side), 0, 0)
@@ -627,6 +901,26 @@ function PieceMesh({
     if (mat.map !== map) {
       mat.map = map
       mat.needsUpdate = true
+    }
+    if (calm) {
+      const place = camera.position
+      const turn = camera.quaternion
+      const stamp = idle.current
+      stamp.ready = true
+      stamp.hot = hot.current
+      stamp.held = held
+      stamp.px = position[0]!
+      stamp.py = position[1]!
+      stamp.pz = position[2]!
+      stamp.x = place.x
+      stamp.y = place.y
+      stamp.z = place.z
+      stamp.qx = turn.x
+      stamp.qy = turn.y
+      stamp.qz = turn.z
+      stamp.qw = turn.w
+    } else {
+      idle.current.ready = false
     }
   })
   return (
@@ -669,7 +963,96 @@ function PieceMesh({
         depthWrite={!ghost}
         toneMapped={false}
       />
+      {showCrests && (
+        <mesh position={[0, 0, 0.08]} raycast={() => null}>
+          <planeGeometry args={[0.98, 0.98]} />
+          <meshBasicMaterial
+            map={crestTexture(type, color, fusion)}
+            transparent
+            opacity={ghost ? 0.55 : 1}
+            alphaTest={0.2}
+            depthWrite={!ghost}
+            toneMapped={false}
+          />
+        </mesh>
+      )}
     </mesh>
+  )
+}
+
+type Floater = { type: PieceType; color: Color; x: number; z: number; phase: number }
+
+/** One hovering sheet per reserve piece, just past that side's camp edge. */
+function reserveFloaters(reserve: Record<Color, PieceType[]>): Floater[] {
+  const list: Floater[] = []
+  for (const color of ['white', 'black'] as const) {
+    const pieces = reserve[color]
+    const z = color === 'white' ? -6.35 : 6.55
+    const gap = pieces.length > 1 ? Math.min(1.35, 8 / (pieces.length - 1)) : 0
+    const origin = -((pieces.length - 1) * gap) / 2
+    pieces.forEach((type, i) => {
+      list.push({
+        type,
+        color,
+        x: origin + i * gap,
+        z,
+        phase: (i * 0.17 + (color === 'black' ? 0.41 : 0)) % 1,
+      })
+    })
+  }
+  return list
+}
+
+function ReserveFloaters({ lib, reserve }: { lib: SpriteLibrary; reserve: Record<Color, PieceType[]> }) {
+  const items = reserveFloaters(reserve)
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+  const layoutKey = items.map((item) => `${item.color}:${item.type}:${item.x.toFixed(2)}`).join('|')
+  const group = useRef<THREE.Group>(null)
+  useLayoutEffect(() => {
+    group.current?.traverse((obj) => {
+      obj.raycast = () => null
+    })
+  }, [layoutKey])
+  useFrame(({ camera, clock }) => {
+    const g = group.current
+    const current = itemsRef.current
+    if (!g) return
+    const t = clock.elapsedTime
+    current.forEach((item, i) => {
+      const mesh = g.children[i] as THREE.Mesh | undefined
+      if (!mesh) return
+      const bob = Math.sin(t * 1.15 + item.phase * Math.PI * 2) * 0.16
+      mesh.position.set(item.x, 1.45 + bob, item.z)
+      mesh.lookAt(camera.position)
+      mesh.rotateY(Math.PI)
+      const frames = facingFrames(lib, item.type, item.color)
+      const index = Math.floor(t * 2 + item.phase * 8) % 8
+      const frame = frames[FACINGS[index]!]
+      const mat = mesh.material as THREE.MeshBasicMaterial
+      if (mat.map !== frame.texture) {
+        mat.map = frame.texture
+        mat.needsUpdate = true
+      }
+    })
+  })
+  if (items.length === 0) return null
+  return (
+    <group ref={group}>
+      {items.map((item, i) => (
+        <mesh key={`${item.color}-${i}-${item.type}`} raycast={() => null}>
+          <planeGeometry args={[0.88, 0.88]} />
+          <meshBasicMaterial
+            map={facingFrames(lib, item.type, item.color).south.texture}
+            transparent
+            alphaTest={0.05}
+            depthWrite={false}
+            side={THREE.DoubleSide}
+            toneMapped={false}
+          />
+        </mesh>
+      ))}
+    </group>
   )
 }
 
@@ -731,6 +1114,13 @@ function mixWhite(hex: string, amount: number) {
   return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`
 }
 
+function mixToward(from: string, to: string, amount: number) {
+  const [r1, g1, b1] = hexRgb(from)
+  const [r2, g2, b2] = hexRgb(to)
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * amount)
+  return `rgb(${mix(r1, r2)}, ${mix(g1, g2)}, ${mix(b1, b2)})`
+}
+
 function clampByte(n: number) {
   return Math.max(0, Math.min(255, n))
 }
@@ -746,14 +1136,38 @@ function Label({
 }) {
   const ref = useRef<THREE.Mesh>(null)
   const texture = useRef<THREE.CanvasTexture | null>(null)
+  const idle = useRef({ ready: false, x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 0 })
   if (!texture.current) texture.current = makeLabel(text, wide)
   useFrame(({ camera }) => {
     const mesh = ref.current
     if (!mesh) return
-    const dx = camera.position.x - mesh.position.x
-    const dz = camera.position.z - mesh.position.z
+    const place = camera.position
+    const turn = camera.quaternion
+    const stamp = idle.current
+    if (
+      stamp.ready &&
+      stamp.x === place.x &&
+      stamp.y === place.y &&
+      stamp.z === place.z &&
+      stamp.qx === turn.x &&
+      stamp.qy === turn.y &&
+      stamp.qz === turn.z &&
+      stamp.qw === turn.w
+    ) {
+      return
+    }
+    const dx = place.x - mesh.position.x
+    const dz = place.z - mesh.position.z
     const pitch = viewPitch(camera, mesh.position.x, mesh.position.y, mesh.position.z)
     applyPose(mesh, Math.atan2(dx, dz), pitch)
+    stamp.ready = true
+    stamp.x = place.x
+    stamp.y = place.y
+    stamp.z = place.z
+    stamp.qx = turn.x
+    stamp.qy = turn.y
+    stamp.qz = turn.z
+    stamp.qw = turn.w
   })
   return (
     <mesh ref={ref} position={position}>

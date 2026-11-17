@@ -12,11 +12,6 @@ export function sqKey(file: number, rank: number): string {
   return `${file},${rank}`
 }
 
-export function parseKey(key: string): { file: number; rank: number } {
-  const [f, r] = key.split(',').map(Number)
-  return { file: f, rank: r }
-}
-
 export function algebraic(file: number, rank: number): string {
   return `${FILE_CHARS[file]}${rank + 1}`
 }
@@ -39,9 +34,24 @@ export const WHITE_SOLDIER_RANKS_1 = [2, 3, 2, 3, 2, 2, 3, 2, 3, 2]
 /** Black mirrors: A9 B8 C9 D8 E9 F9 G8 H9 I8 J9 */
 export const BLACK_SOLDIER_RANKS_1 = [9, 8, 9, 8, 9, 9, 8, 9, 8, 9]
 
-export function soldierBaseRank(color: Color, file: number): number {
+/** 0-based zigzag ranks. Testing preset only — a match does not use this map. */
+export function zigzagSoldierRanks(color: Color): number[] {
   const list = color === 'white' ? WHITE_SOLDIER_RANKS_1 : BLACK_SOLDIER_RANKS_1
-  return list[file] - 1
+  return list.map((rank) => rank - 1)
+}
+
+export function soldierBaseRank(color: Color, file: number): number {
+  return zigzagSoldierRanks(color)[file]!
+}
+
+export function blankSoldierRanks(): number[] {
+  return Array.from({ length: FILES }, () => -1)
+}
+
+/** Soldaten: ranks 2–3 (White) or 8–9 (Black). Never the back rank. */
+export function isSoldierSetupRank(color: Color, rank: number): boolean {
+  if (color === 'white') return rank === 1 || rank === 2
+  return rank === 7 || rank === 8
 }
 
 /** Setup: mains only on ranks 1–2 (white) / 10–9 (black). */
@@ -50,9 +60,11 @@ export function isMainSetupRank(color: Color, rank: number): boolean {
   return rank === 8 || rank === 9
 }
 
-export function isCampRank(color: Color, rank: number): boolean {
-  if (color === 'white') return rank >= 0 && rank <= 2
-  return rank >= 7 && rank <= 9
+/** Main piece must stand strictly closer to that side's back rank than its Soldat. */
+export function isBehindOwnSoldier(color: Color, rank: number, soldierRank: number): boolean {
+  if (!isMainSetupRank(color, rank) || soldierRank < 0) return false
+  if (color === 'white') return rank < soldierRank
+  return rank > soldierRank
 }
 
 export function isMidfield(rank: number): boolean {
@@ -80,9 +92,6 @@ export function cloneBoard(board: (Stack | null)[][]): (Stack | null)[][] {
 }
 
 let _id = 1
-export function resetPieceIds(start = 1): void {
-  _id = start
-}
 
 export function makePiece(type: PieceType, color: Color, id?: number): Piece {
   const n = id ?? _id++
@@ -92,8 +101,4 @@ export function makePiece(type: PieceType, color: Color, id?: number): Piece {
 
 export function setPieceIdCounter(n: number): void {
   _id = n
-}
-
-export function getPieceIdCounter(): number {
-  return _id
 }
